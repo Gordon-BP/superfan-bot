@@ -1,12 +1,30 @@
 import pandas as pd
-import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 import re
 from os.path import exists
 from transformers import GPT2TokenizerFast
 from app import get_embedding
 from apiKeys import XML_FILEPATH, EMBEDDINGS_FILEPATH, URI
 
-def getContentPages(uri:str, xmlFilepath:str, namespace:str = "0",)-> pd.DataFrame:
+def cleanText(rawText:str) -> str:
+    """
+    Cleans raw text from XML using regex magic.
+    TODO Refine the crap out of this function so that it cleans better
+    
+    Parameters:
+        rawText(str): The text to clean
+    
+    Returns
+        str: Cleaned version of text
+    """
+    cleanText = re.sub(r"\|\S* ?\S* ?\S* ?\S*\]\]",'',rawText)
+    cleanText = re.sub("\]+|\[+",'',cleanText)
+    cleanText = re.sub(r"'+", '', cleanText)
+    cleanText = re.sub(r"{{\S* ?\S* ?\S*\|\S* ?\S* ?\S* ?\S* ?}}",'',cleanText)
+    #cleanText = re.sub(r"{{(.*)",'',cleanText)
+    return cleanText
+
+def getContentPages(uri:str, xmlFilepath:str, namespace:str = "0", limit:int = 1000)-> pd.DataFrame:
     """
     Parses the XML file to extract all the content pages into a DataFrame.
 
@@ -14,41 +32,34 @@ def getContentPages(uri:str, xmlFilepath:str, namespace:str = "0",)-> pd.DataFra
         uri(str): The XML URI string that's prepended onto all the tags. Usually a URL like "mediawiki.org"
         xmlFile(str): The path to the exported XML file
         namespace(str): The namespace representing the content category. '0' by default
+        limit(int): Maximum number of content pages to extract. 1000 by default
     Returns:
         pd.DataFrame of the content in three columns:
         | id | title | text |
         |----|-------|------|
     """
-    tree = ET.parse(xmlFilepath)
-    root = tree.getroot()
+    soup = BeautifulSoup(open("civilization_pages_current.xml"), "lxml")
+    pages = soup.find_all('page')
     contentPages = []
-    for page in root.findall(f"{uri}page"):
+    for page in pages:
         try:
-            ns = page.find(f"{uri}ns").text
-            if(ns == namespace):
-                id = page.find(f"{uri}id").text
-                title = page.find(f"{uri}title").text
-                text = page.find(f"{uri}revision").find(f"{uri}text").text
-                text = re.sub(r"{{PAGENAME}}",title, text)
-                # remove the 'overview' and other non-content stuff
-                text = re.sub(r"({{overview(\s|.)*\n}})",'', 
-                    re.sub(r"\n\|.+",'',
-                    re.sub(r"File:.*", '', 
-                    re.sub(r"</?gallery>",'', text))))
-
-                contentPages.append({
-                        "id":id,
-                        "title":title,
-                        "text":text
-                        })
+            id = page.id.contents[0]
+            title = page.title.contents[0]
+            text = re.sub(r"\n",'',
+                re.sub(r"{{PAGENAME}}", title,page.find('text').contents[0]))
+            text = cleanText(text)
+            if(len(text) < 50):
+                continue
+            else:
+                contentPages.append({"id":id, "title":title, "text":text})
                 print(f"Extracted page: {title}")
+                if(len(contentPages) > limit):
+                    break
         except:
-            print(f"Error parsing page {page.tag}")
-            continue
+            print(f"Error parsing page {page.title}")
+        continue
     print("Let's put all these guys into a DataFrame now!")
     df =  pd.DataFrame.from_records(contentPages)
-    # Now it's time to clean the data by removing some irrelevant and behind-the-scenes stuff
-
     return df
 
 def break_into_sections(row: pd.Series) -> pd.DataFrame:
