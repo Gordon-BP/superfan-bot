@@ -2,6 +2,7 @@ import pandas as pd
 import re
 import os
 import sqlalchemy
+from dotenv import load_dotenv
 import pg8000
 import mwparserfromhell
 from pyunpack import Archive
@@ -162,34 +163,32 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
     Connects to a Google Cloud Postgresql database. 
     Make sure that the env variables are properly defined in your cloudbuilder.yaml file.
     """
+    # Uncomment the below for local development
+    # load_dotenv()
     # Note: These env variables are defined in cloudbuilder.yaml
     # Except for the password, you have to make that in the secret manager
     # Cloud Secret Manager (https://cloud.google.com/secret-manager)
-    db_user = os.environ["DB_USER"]  # e.g. 'my-database-user'
-    db_pass = os.environ["DB_PASS"]  # e.g. 'my-database-password'
-    db_name = os.environ["DB_NAME"]  # e.g. 'my-database'
-    unix_socket_path = os.environ["INSTANCE_UNIX_SOCKET"]  # e.g. '/cloudsql/project:region:instance'
-
+    db_user = os.environ["DATABASE_USER"]  # e.g. 'my-database-user'
+    db_pass = os.environ["DATABASE_PASS"]  # e.g. 'my-database-password'
+    db_name = os.environ["DATABASE_NAME"]  # e.g. 'my-database'
+    unix_socket_path = os.environ["INSTANCE_CONNECTION_NAME"]  # e.g. '/cloudsql/project:region:instance'
     #Let's make sure folks actually set their variables in the yaml file...
     assert db_user != "TEST_USER_CHANGE_ME", "Invalid database username in cloudbuilder.yaml"
     assert db_pass != "hunter2", "Invalid database password in cloudbuilder.yaml"
     assert db_name != "DB_NAME_GOES_HERE", "Invalid database name in cloudbuilder.yaml"
     assert unix_socket_path != "PROJECT:REGION:INSTANCE", "Invalid socket path in cloudbuilder.yaml"
-
+   
     pool = sqlalchemy.create_engine(
         # Equivalent URL:
         # postgresql+pg8000://<db_user>:<db_pass>@/<db_name>
         #                         ?unix_sock=<INSTANCE_UNIX_SOCKET>/.s.PGSQL.5432
-        # Note: Some drivers require the `unix_sock` query parameter to use a different key.
-        # For example, 'psycopg2' uses the path set to `host` in order to connect successfully.
         sqlalchemy.engine.url.URL.create(
             drivername="postgresql+pg8000",
             username=db_user,
             password=db_pass,
             database=db_name,
-            query={"unix_sock": "{}/.s.PGSQL.5432".format(unix_socket_path)},
-            pool_pre_ping=True
-        ),
+            query={"unix_sock": "{}/.s.PGSQL.5432".format(unix_socket_path)}
+        )
         # ...
     )
     return pool

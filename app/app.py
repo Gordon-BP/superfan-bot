@@ -13,8 +13,6 @@ def get_embedding(text: str) -> list[float]:
     )
     return result["data"][0]["embedding"]
 
-#document_embeddings = load_embeddings("https://cdn.openai.com/API/examples/data/olympics_sections_document_embeddings.csv")
-
 def vector_similarity(x: list[float], y: list[float]) -> float:
     """
     We could use cosine similarity or dot product to calculate the similarity between vectors.

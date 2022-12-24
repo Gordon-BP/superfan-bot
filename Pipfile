@@ -20,6 +20,7 @@ sqlalchemy = "*"
 pg8000 = "*"
 bs4 = "*"
 nltk = "*"
+python-dotenv = "*"
 
 [dev-packages]
 ipykernel = "*"
