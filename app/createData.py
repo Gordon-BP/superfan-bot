@@ -204,23 +204,6 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
     )
     return pool
 
-def createDatabaseTable(tableName:str, tableData:pd.DataFrame) -> str:
-    """
-    Creates a table in the database with the attached data.
-    
-    Parameters:
-        tableName(str): What the table is called
-        tableData(pd.DataFrame): What to fill the table with
-    """
-    pool = connect_unix_socket()
-    try:
-        with pool.connect as db_conn:
-            tableData.to_sql(tableName, db_conn)
-        return f"Successfully created table {tableName}"
-    except:
-        return "There was an error, check the logs?"
-        
-
 def compute_doc_embeddings(df: pd.DataFrame) -> dict[tuple[str, str], list[float]]:
     """
     Create an embedding for each row in the dataframe using the OpenAI Embeddings API.
@@ -278,7 +261,6 @@ def createDataset(url:str, dbPrefix:str) -> None:
     # Fetch the data from the url, parse it, clean it, chunk it, and pop it into a SQL table
         try:
             with pool.connect as db_conn:
-                url = 'https://s3.amazonaws.com/wikia_xml_dumps/c/ci/civilization_pages_current.xml.7z'
                 soup = getWikiAsSoup(url, Path('wiki.xml.7z'))
                 df = cleanData(soup.find_all('page'))
                 df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
@@ -288,7 +270,7 @@ def createDataset(url:str, dbPrefix:str) -> None:
                     dfArray.append(reduce_long(row))
                 df = pd.concat(dfArray)
                 #Yeet the rows of 20 tokens or fewer as those won't contain enough data to be useful
-                createDatabaseTable(f"{dbPrefix}_articles", df.loc[df.tokens > 20])
+                df.loc[df.tokens > 20].to_sql(f"{dbPrefix}_articles", db_conn)
                 print(f"Successfully created table {dbPrefix}_artices")
                 #TODO: See if these two lines actually work or if they fuck everything up
                 os.remove("wiki.xml")
@@ -300,6 +282,8 @@ def createDataset(url:str, dbPrefix:str) -> None:
         try:
             cost = compute_cost_estimate(df)
             print(f"Fetching embeddings for this document is estimated to cost USD: {cost}")
+            #TODO: Maybe put a way to stop this if the cost is too high?...
+            #TODO: Make a joke mode where we add $100 to the cost 
             embeddings = compute_doc_embeddings(df)
             embeddings_dict = []
             for idx, row in df.iterrows():

@@ -1,14 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from app import *
-from createData import createDataset
-from createData import createDataset
+#from createData import createDataset
 app = FastAPI()
-
-class QueryObj(BaseModel):
-    prompt:str
-    token:str
-    modelName:str = "text-embedding-ada-002"
 
 @app.get("/")
 def root():

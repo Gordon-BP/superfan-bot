@@ -57,6 +57,7 @@ def fetch_data_and_prompt_GPT(prompt:str, results: list[(float, (str, str))], co
     """
 
     MAX_SECTION_LEN = 2048
+    #TODO What's the actual max token count for GPT3 completion?
     SEPARATOR = "\n* "
 
     tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
