@@ -21,6 +21,7 @@ pg8000 = "*"
 bs4 = "*"
 nltk = "*"
 python-dotenv = "*"
+"google.auth" = "*"
 
 [dev-packages]
 ipykernel = "*"

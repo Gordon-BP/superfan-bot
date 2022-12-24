@@ -166,16 +166,15 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
     # Note: These env variables are defined in cloudbuilder.yaml
     # Except for the password, you have to make that in the secret manager
     # Cloud Secret Manager (https://cloud.google.com/secret-manager)
-    db_user = os.environ["DATABASE_USER"]  # e.g. 'my-database-user'
-    db_pass = os.environ["DATABASE_PASS"]  # e.g. 'my-database-password'
-    db_name = os.environ["DATABASE_NAME"]  # e.g. 'my-database'
-    unix_socket_path = os.environ["INSTANCE_CONNECTION_NAME"]  # e.g. '/cloudsql/project:region:instance'
+    db_user = "new-user" #os.environ["DATABASE_USER"]  # e.g. 'my-database-user'
+    db_pass = "E^\#d974T&xUS^vKZLE@kbADx5" #os.environ["DATABASE_PASS"]  # e.g. 'my-database-password'
+    db_name = "database1" #os.environ["DATABASE_NAME"]  # e.g. 'my-database'
+    unix_socket_path = "/cloudsql/superfan-bot:us-central1:civ6-wikia" #os.environ["INSTANCE_CONNECTION_NAME"]  # e.g. '/cloudsql/project:region:instance'
     #Let's make sure folks actually set their variables in the yaml file...
     assert db_user != "TEST_USER_CHANGE_ME", "Invalid database username in cloudbuilder.yaml"
     assert db_pass != "hunter2", "Invalid database password in cloudbuilder.yaml"
     assert db_name != "DB_NAME_GOES_HERE", "Invalid database name in cloudbuilder.yaml"
     assert unix_socket_path != "PROJECT:REGION:INSTANCE", "Invalid socket path in cloudbuilder.yaml"
-   
     pool = sqlalchemy.create_engine(
         # Equivalent URL:
         # postgresql+pg8000://<db_user>:<db_pass>@/<db_name>
