@@ -1,121 +1,216 @@
 import pandas as pd
 from bs4 import BeautifulSoup
 import re
-from os.path import exists
+import os
+import sqlalchemy
+import ps8000
+import mwparserfromhell
+from pyunpack import Archive
+from bs4 import BeautifulSoup, ResultSet
+import pandas as pd
+import requests
+from pathlib import Path
 from transformers import GPT2TokenizerFast
+from nltk.tokenize import sent_tokenize
+
+# probably don't need these two
 from app import get_embedding
 from apiKeys import XML_FILEPATH, EMBEDDINGS_FILEPATH, URI
 
-def cleanText(rawText:str) -> str:
-    """
-    Cleans raw text from XML using regex magic.
-    TODO Refine the crap out of this function so that it cleans better
-    
-    Parameters:
-        rawText(str): The text to clean
-    
-    Returns
-        str: Cleaned version of text
-    """
-    cleanText = re.sub(r"\|\S* ?\S* ?\S* ?\S*\]\]",'',rawText)
-    cleanText = re.sub("\]+|\[+",'',cleanText)
-    cleanText = re.sub(r"'+", '', cleanText)
-    cleanText = re.sub(r"{{\S* ?\S* ?\S*\|\S* ?\S* ?\S* ?\S* ?}}",'',cleanText)
-    #cleanText = re.sub(r"{{(.*)",'',cleanText)
-    return cleanText
+def getWikiAsSoup(url:str, filepath:Path)-> BeautifulSoup:
+  response = requests.get(url)
+  filepath.write_bytes(response.content)
+  Archive(filepath).extractall("/content/")
+  return BeautifulSoup(open("wiki.xml"), "lxml")
 
-def getContentPages(uri:str, xmlFilepath:str, namespace:str = "0", limit:int = 1000)-> pd.DataFrame:
-    """
-    Parses the XML file to extract all the content pages into a DataFrame.
+def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
+  """
+    Main method to parse a wiki XML file and turn it into a nice pretty DataFrame like
+    | id | Title | Heading | Text |
+    |----|-------|---------|------|
 
-    Parameters:
-        uri(str): The XML URI string that's prepended onto all the tags. Usually a URL like "mediawiki.org"
-        xmlFile(str): The path to the exported XML file
-        namespace(str): The namespace representing the content category. '0' by default
-        limit(int): Maximum number of content pages to extract. 1000 by default
-    Returns:
-        pd.DataFrame of the content in three columns:
-        | id | title | text |
-        |----|-------|------|
-    """
-    soup = BeautifulSoup(open("civilization_pages_current.xml"), "lxml")
-    pages = soup.find_all('page')
-    contentPages = []
-    for page in pages:
-        try:
-            id = page.id.contents[0]
-            title = page.title.contents[0]
-            text = re.sub(r"\n",'',
-                re.sub(r"{{PAGENAME}}", title,page.find('text').contents[0]))
-            text = cleanText(text)
-            if(len(text) < 50):
-                continue
+  Parameters:
+    pages(ResultSet): the collection of pages from the wiki file. Generate using soup.find_all()
+    limit(int): Optional, limit the number of pages to iterate through
+  
+  Returns:
+    pd.DataFrame
+  """
+  dataArr = []
+  badHeadings = ['See also', 'References', 'External links', 'Further reading', "Footnotes",
+    "Bibliography", "Sources", "Citations", "Literature", "Footnotes", "Notes and references",
+    "Photo gallery", "Works cited", "Photos", "Gallery", "Notes", "References and sources",
+    "References and notes"]
+  counter = 0
+  for page in pages:
+    if(page.ns.contents[0] == '0'):
+      if((limit > 0) & (counter > limit)): break
+      try:
+        counter +=1
+        id = page.id.contents[0]
+        title = page.title.contents[0]
+        wikipage = mwparserfromhell.parse(
+            page.find('text').contents
+            )
+        sections = wikipage.get_sections(
+            flat=True,
+            include_lead=True,
+            include_headings = True
+        )
+        for section in sections:
+          #TODO should probably replace these lines with some kind of recursive function
+          heading = section.filter_headings()
+          if(len(heading) == 0):
+          # This is a short article with just the summary paragraph
+            heading = 'Summary'
+            text = section.strip_code(
+                normalize=True,
+                collapse=True,
+                keep_template_params=False)
+            if((len(text) < 20) or ("REDIRECT" in text)):
+              print(f"Skipping {title} - {heading}")
+            dataArr.append({
+                  "title":title,
+                  "heading":heading,
+                  "text":text
+              })
+          elif(len(heading) == 1):
+          # This is a properly formatted section
+            heading = heading[0].title
+            text = section.strip_code(
+                normalize=True,
+                collapse=True,
+                keep_template_params=False)
+            # There's a few criteria for whether or not we want to keep this data
+            if((heading in badHeadings) or (len(text) < 20) or ("REDIRECT" in text)):
+              print(f"Skipping {title} - {heading}")
             else:
-                contentPages.append({"id":id, "title":title, "text":text})
-                print(f"Extracted page: {title}")
-                if(len(contentPages) > limit):
-                    break
-        except:
-            print(f"Error parsing page {page.title}")
-        continue
-    print("Let's put all these guys into a DataFrame now!")
-    df =  pd.DataFrame.from_records(contentPages)
-    return df
+              dataArr.append({
+                  "title":title,
+                  "heading":heading,
+                  "text":text
+              })
+          else:
+            subheaders = []
+            subList = []
+            for subsection in section.get_sections():
+              subheaders = [x.group() for x in re.finditer(r"={2}([a-zA-Z-']* ?){1,4}={2}\n",str(subsection))]
+              subList = re.split(r"={2}([a-zA-Z-']* ?){1,4}={2}\n", str(subsection))
+              subList = [_ for _ in subList if _!= '']
+              subheaders = ['Overview']+[_ for _ in subheaders if _!='']
+              subsections = zip(subheaders, subList)
+              for subheader,subcontent in subsections:
+                subsubheaders = [x.group() for x in re.finditer(r"={3}([a-zA-Z-']* ?){1,4}={3}\n",str(subcontent))]
+                subsubcontent = re.split(r"={3}([a-zA-Z-']* ?){1,4}={3}\n", str(subcontent))
+                subsubheaders = [_ for _ in subsubheaders if _!= '']
+                subsubcontent = [_ for _ in subsubcontent if _!='']
+                if len(subsubheaders)==0:
+                  heading = re.sub(r"=",'', subheader)
+                  text = mwparserfromhell.parse(subsubcontent[0]).strip_code()
+                  if((heading in badHeadings) or (len(text) < 20) or ("REDIRECT" in text)):
+                    print(f"Skipping {title} - {subheader} - {heading}")
+                  dataArr.append({
+                      "title":title,
+                      "heading":heading,
+                      "text":text 
+                  })
+                else:
+                  subsubsections = zip(subsubheaders, subsubcontent)
+                  for subsubsubheader, subsubsubcontent in subsubsections:
+                    dataArr.append({
+                        "title":title,
+                        "heading":re.sub(r"=",'', subheader) + " - " + re.sub(r"=",'', subsubsubheader),
+                        "text": mwparserfromhell.parse(subsubsubcontent).strip_code()
+                    })
+      except:
+        print(f"Error processing page {page.title.contents[0]}")
+        counter +=1
+  return pd.DataFrame.from_records(dataArr)
 
-def break_into_sections(row: pd.Series) -> pd.DataFrame:
+def reduce_long(
+    dataSection: pd.Series,  max_len: int = 590
+) -> pd.DataFrame:
     """
-    Takes an entire article and turns it into multiple rows of a DataFrame, each labeled by section.
-
-    Parameters:
-        row(pd.Series): The row with a wiki article in it
-    
-    Returns:
-        pd.DataFrame of the row broken into multiple rows by section like:
-        | id |  title  |  header | text |
-        |----|---------|---------|------|
-        | 12 | Victory | Summary | .... |
-
-        If the article is super short and has no headers, a default header 'Summary' will be applied.
-    
+    Reduce a long text to a maximum of `max_len` tokens by potentially cutting at a sentence end
     """
-    rows = []
-    # Not sure if all wiki XML files denote headers like ' === Header Title==='
-    # If they don't, this is the regex to change
-    headers = re.findall(r"={2,3}([a-zA-Z\s]*)===?", row.text)
-
-    # This is the logic that applies a default header
-    if(len(headers) == 0):
-        rows.append({
-                "id":row.id,
-                "title":row.title,
-                "header":"Summary",
-                "text":row.text
-            })
+    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    if not long_text_tokens:
+        long_text_tokens = len(tokenizer.encode(long_text))
+    if long_text_tokens > max_len:
+        sentences = sent_tokenize(long_text.replace("\n", " "))
+        ntokens = 0
+        for i, sentence in enumerate(sentences):
+            ntokens += 1 + len(tokenizer.encode(sentence))
+            if ntokens > max_len:
+                return ". ".join(sentences[:i][:-1]) + "."
+    if dataSection.tokens <= max_len:
+        return pd.DataFrame(dataSection)
     else:
-        headerIdx = [0]
-        for header in headers:
-            headerStart = re.search(f"{header}", row.text)
-            if headerStart is not None:
-                headerIdx.append(headerStart.span()[0]) 
-            else:
-                headers.remove(header)
-        # Gotta pop 'Summary' in for the first section of longer articles, too.
-        # And add the length to the index list so we can properly capture the last section.
-        headers.insert(0,"Summary")
-        headerIdx.append(len(row.text))
+        dataArr = []
+        sentences = sent_tokenize(dataSection.text.str.replace("\n", " "))
+        ntokens = 0
+        counter = 0
+        last_idx = 0
+        for i, sentence in enumerate(sentences):
+            ntokens += 1 + len(tokenizer.encode(sentence))
+            if ntokens > max_len:
+                counter += 1
+                last_idx=i
+                dataArr.append({
+                    "id":dataSection.id,
+                    "title":dataSection.title,
+                    "heading":dataSection.heading + " " + str(counter),
+                    "text":". ".join(sentences[last_idx:i])
+                    })
+        return pd.DataFrame.from_records(dataArr)
 
-        for i in range(len(headers)):
-            try:
-                text = row.text[headerIdx[i]: headerIdx[i+1]]
-                rows.append({
-                    "id":row.id,
-                    "title":row.title,
-                    "header":headers[i],
-                    "text":text
-                })
-            except:
-                print(f"Something went wrong trying to parse {headers[i]} in {row.title}")
-    return pd.DataFrame.from_records(rows)
+def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
+    # Note: Saving credentials in environment variables is convenient, but not
+    # secure - consider a more secure solution such as
+    # Cloud Secret Manager (https://cloud.google.com/secret-manager) to help
+    # keep secrets safe.
+    db_user = os.environ["DB_USER"]  # e.g. 'my-database-user'
+    db_pass = os.environ["DB_PASS"]  # e.g. 'my-database-password'
+    db_name = os.environ["DB_NAME"]  # e.g. 'my-database'
+    unix_socket_path = os.environ["INSTANCE_UNIX_SOCKET"]  # e.g. '/cloudsql/project:region:instance'
+
+    pool = sqlalchemy.create_engine(
+        # Equivalent URL:
+        # postgresql+pg8000://<db_user>:<db_pass>@/<db_name>
+        #                         ?unix_sock=<INSTANCE_UNIX_SOCKET>/.s.PGSQL.5432
+        # Note: Some drivers require the `unix_sock` query parameter to use a different key.
+        # For example, 'psycopg2' uses the path set to `host` in order to connect successfully.
+        sqlalchemy.engine.url.URL.create(
+            drivername="postgresql+pg8000",
+            username=db_user,
+            password=db_pass,
+            database=db_name,
+            query={"unix_sock": "{}/.s.PGSQL.5432".format(unix_socket_path)},
+            pool_pre_ping=True
+        ),
+        # ...
+    )
+    return pool
+
+def createDatabaseTable(tableName:str) -> str:
+    """
+    TODO: Add a proper docstring once I figure out how these goddamn databases work
+    """
+  # First, download and prep the data
+    url = 'https://s3.amazonaws.com/wikia_xml_dumps/c/ci/civilization_pages_current.xml.7z'
+    soup = getWikiAsSoup(url, Path('wiki.xml.7z'))
+    df = cleanData(soup.find_all('page'))
+    df = df.drop(df.loc[df['text'].str.contains("REDIRECT")].index).reset_index()
+
+    # Next, upload it to our PostgreSQL database
+    pool = connect_unix_socket()
+    try:
+        with pool.connect as db_conn:
+            df.to_sql(tableName, db_conn)
+        return f"Successfully created table {tableName}"
+    except:
+        return "There was an error, check the logs?"
+        
 
 def compute_doc_embeddings(df: pd.DataFrame) -> dict[tuple[str, str], list[float]]:
     """
