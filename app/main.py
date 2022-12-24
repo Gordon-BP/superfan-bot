@@ -1,10 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from .app import get_embedding
-from dotenv import load_dotenv
 from .createData import createDataset, connect_unix_socket
 app = FastAPI()
-load_dotenv()
 
 @app.get("/")
 def root():
@@ -47,4 +45,4 @@ def get_top3_docs(prompt: str) -> dict:
         }
 @app.post("/api/v1/createData")
 def createData(url:str, tableName:str):
-    return createDataset(url, tableName)
+    return "Lol nope" #createDataset(url, tableName)

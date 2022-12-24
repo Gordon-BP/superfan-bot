@@ -2,7 +2,6 @@ import pandas as pd
 import re
 import os
 import sqlalchemy
-from dotenv import load_dotenv
 import pg8000
 import mwparserfromhell
 from pyunpack import Archive
@@ -164,7 +163,6 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
     Make sure that the env variables are properly defined in your cloudbuilder.yaml file.
     """
     # Uncomment the below for local development
-    # load_dotenv()
     # Note: These env variables are defined in cloudbuilder.yaml
     # Except for the password, you have to make that in the secret manager
     # Cloud Secret Manager (https://cloud.google.com/secret-manager)
