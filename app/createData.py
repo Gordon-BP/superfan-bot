@@ -1,5 +1,4 @@
 import pandas as pd
-from bs4 import BeautifulSoup
 import re
 import os
 import sqlalchemy
@@ -7,20 +6,17 @@ import ps8000
 import mwparserfromhell
 from pyunpack import Archive
 from bs4 import BeautifulSoup, ResultSet
-import pandas as pd
 import requests
 from pathlib import Path
 from transformers import GPT2TokenizerFast
 from nltk.tokenize import sent_tokenize
-
-# probably don't need these two
 from app import get_embedding
 from apiKeys import XML_FILEPATH, EMBEDDINGS_FILEPATH, URI
 
 def getWikiAsSoup(url:str, filepath:Path)-> BeautifulSoup:
   response = requests.get(url)
   filepath.write_bytes(response.content)
-  Archive(filepath).extractall("/content/")
+  Archive(filepath).extractall("./")
   return BeautifulSoup(open("wiki.xml"), "lxml")
 
 def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
@@ -70,6 +66,7 @@ def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
             if((len(text) < 20) or ("REDIRECT" in text)):
               print(f"Skipping {title} - {heading}")
             dataArr.append({
+                  "id":id,
                   "title":title,
                   "heading":heading,
                   "text":text
@@ -86,6 +83,7 @@ def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
               print(f"Skipping {title} - {heading}")
             else:
               dataArr.append({
+                  "id":id,
                   "title":title,
                   "heading":heading,
                   "text":text
@@ -96,20 +94,21 @@ def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
             for subsection in section.get_sections():
               subheaders = [x.group() for x in re.finditer(r"={2}([a-zA-Z-']* ?){1,4}={2}\n",str(subsection))]
               subList = re.split(r"={2}([a-zA-Z-']* ?){1,4}={2}\n", str(subsection))
-              subList = [_ for _ in subList if _!= '']
-              subheaders = ['Overview']+[_ for _ in subheaders if _!='']
+              subList = [str(_) for _ in subList if _!= '']
+              subheaders = ['Overview']+[str(_) for _ in subheaders if _!='']
               subsections = zip(subheaders, subList)
               for subheader,subcontent in subsections:
                 subsubheaders = [x.group() for x in re.finditer(r"={3}([a-zA-Z-']* ?){1,4}={3}\n",str(subcontent))]
                 subsubcontent = re.split(r"={3}([a-zA-Z-']* ?){1,4}={3}\n", str(subcontent))
-                subsubheaders = [_ for _ in subsubheaders if _!= '']
-                subsubcontent = [_ for _ in subsubcontent if _!='']
+                subsubheaders = [str(_) for _ in subsubheaders if _!= '']
+                subsubcontent = [str(_) for _ in subsubcontent if _!='']
                 if len(subsubheaders)==0:
                   heading = re.sub(r"=",'', subheader)
                   text = mwparserfromhell.parse(subsubcontent[0]).strip_code()
                   if((heading in badHeadings) or (len(text) < 20) or ("REDIRECT" in text)):
                     print(f"Skipping {title} - {subheader} - {heading}")
                   dataArr.append({
+                      "id":id,
                       "title":title,
                       "heading":heading,
                       "text":text 
@@ -118,6 +117,7 @@ def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
                   subsubsections = zip(subsubheaders, subsubcontent)
                   for subsubsubheader, subsubsubcontent in subsubsections:
                     dataArr.append({
+                        "id":id,
                         "title":title,
                         "heading":re.sub(r"=",'', subheader) + " - " + re.sub(r"=",'', subsubsubheader),
                         "text": mwparserfromhell.parse(subsubsubcontent).strip_code()
@@ -127,11 +127,14 @@ def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
         counter +=1
   return pd.DataFrame.from_records(dataArr)
 
-def reduce_long(
-    dataSection: pd.Series,  max_len: int = 590
-) -> pd.DataFrame:
+def reduce_long(dataSection: pd.Series,  max_len: int = 400) -> pd.DataFrame:
     """
-    Reduce a long text to a maximum of `max_len` tokens by potentially cutting at a sentence end
+    Takes a large paragraph and splits it into multiple smaller ones by sentence.
+    Parameters:
+        dataSection(pd.Series): A row of the dataframe with the articles data in it
+        max_len(int): the maximum size for the paragraphs. It's not followed super closely so if you have a hard limit give it some room. 400 by default
+    Returns:
+        pd.DataFrame of the split rows (or of the original row if its below max_len)
     """
     tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
     if not long_text_tokens:
@@ -165,14 +168,23 @@ def reduce_long(
         return pd.DataFrame.from_records(dataArr)
 
 def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
-    # Note: Saving credentials in environment variables is convenient, but not
-    # secure - consider a more secure solution such as
-    # Cloud Secret Manager (https://cloud.google.com/secret-manager) to help
-    # keep secrets safe.
+    """
+    Connects to a Google Cloud Postgresql database. 
+    Make sure that the env variables are properly defined in your cloudbuilder.yaml file.
+    """
+    # Note: These env variables are defined in cloudbuilder.yaml
+    # Except for the password, you have to make that in the secret manager
+    # Cloud Secret Manager (https://cloud.google.com/secret-manager)
     db_user = os.environ["DB_USER"]  # e.g. 'my-database-user'
     db_pass = os.environ["DB_PASS"]  # e.g. 'my-database-password'
     db_name = os.environ["DB_NAME"]  # e.g. 'my-database'
     unix_socket_path = os.environ["INSTANCE_UNIX_SOCKET"]  # e.g. '/cloudsql/project:region:instance'
+
+    #Let's make sure folks actually set their variables in the yaml file...
+    assert db_user is not "TEST_USER_CHANGE_ME", "Invalid database username in cloudbuilder.yaml"
+    assert db_pass is not "hunter2", "Invalid database password in cloudbuilder.yaml"
+    assert db_name is not "DB_NAME_GOES_HERE", "Invalid database name in cloudbuilder.yaml"
+    assert unix_socket_path is not "PROJECT:REGION:INSTANCE", "Invalid socket path in cloudbuilder.yaml"
 
     pool = sqlalchemy.create_engine(
         # Equivalent URL:
@@ -192,21 +204,18 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
     )
     return pool
 
-def createDatabaseTable(tableName:str) -> str:
+def createDatabaseTable(tableName:str, tableData:pd.DataFrame) -> str:
     """
-    TODO: Add a proper docstring once I figure out how these goddamn databases work
+    Creates a table in the database with the attached data.
+    
+    Parameters:
+        tableName(str): What the table is called
+        tableData(pd.DataFrame): What to fill the table with
     """
-  # First, download and prep the data
-    url = 'https://s3.amazonaws.com/wikia_xml_dumps/c/ci/civilization_pages_current.xml.7z'
-    soup = getWikiAsSoup(url, Path('wiki.xml.7z'))
-    df = cleanData(soup.find_all('page'))
-    df = df.drop(df.loc[df['text'].str.contains("REDIRECT")].index).reset_index()
-
-    # Next, upload it to our PostgreSQL database
     pool = connect_unix_socket()
     try:
         with pool.connect as db_conn:
-            df.to_sql(tableName, db_conn)
+            tableData.to_sql(tableName, db_conn)
         return f"Successfully created table {tableName}"
     except:
         return "There was an error, check the logs?"
@@ -215,8 +224,15 @@ def createDatabaseTable(tableName:str) -> str:
 def compute_doc_embeddings(df: pd.DataFrame) -> dict[tuple[str, str], list[float]]:
     """
     Create an embedding for each row in the dataframe using the OpenAI Embeddings API.
-    
     Return a dictionary that maps between each embedding vector and the index of the row that it corresponds to.
+    TODO: make this async or something
+
+    Parameters:
+        df(pd.DataFrame): The data to embed. Should look like:
+            | id | title | heading | text | tokens |
+            |----|-------|---------|------|--------|
+    Returns:
+        dict: [(tite, heading), 1526 numbers]
     """
     return {
         idx: get_embedding(r.text.replace("\n", " ")) for idx, r in df.iterrows()
@@ -231,51 +247,65 @@ def compute_cost_estimate(df: pd.DataFrame) -> float:
     Returns:
         float: the estimated cost to embed the whole document
     """
-    return df.token.sum()/1000*0.0004
+    return (df.tokens.sum()/1000)*0.0004
 
-def createDataset():
-    uri = URI
-    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-
-    print("Beginning data parsing...")
-    sectioned_pages_df = []
-    print("Extracting content pages...")
-    content_df = getContentPages(uri, XML_FILEPATH)
-    print("Breaking content df into sections...")
-    #TODO- try to optimize this and remove the iterrows(), this is a bottleneck
-    for _, row in content_df.iterrows():
-        sectioned_pages_df.append(break_into_sections(row))
-
-    df = pd.concat(sectioned_pages_df, ignore_index=True)
-    print("Tokenizing sections...")
-    df['tokens'] = df.text.apply(lambda x: len(tokenizer.encode(x)))
-    
-    # Lets clean this dataset even more. 
-    # First, drop all the tiny little article stubs
-    print("Cleaning dataset...")
-    bad_headers = ['Videos', 'See also', 'References', 'XML', 'Python', 'External links', '\n\n']
-    df.drop(df[df.tokens < 30].index, axis=0, inplace=True)
-    df.drop(df[df.tokens > 400 ].index, axis=0, inplace=True)
-    df.drop(df[df.header.str.strip().isin(bad_headers)].index, axis=0, inplace=True)
-
-    print(df.head())
-    print("Saving to file....")
-    df.to_csv("data/Civ6-Atricles-Cleaned.csv")
-
-    if(exists(EMBEDDINGS_FILEPATH)):
-        print("Embeddings file already found, skipping embeddings calls")
-    else:
-        cost = compute_cost_estimate(df)
-        print(f"Fetching embeddings for this document is estimated to cost USD: {cost}")
-        embeddings = compute_doc_embeddings(df)
-        context_df = pd.DataFrame.from_dict(embeddings)
-        context_df.to_csv("data/raw_embeddings.csv")
-        embeddings_dict = []
-        for idx, row in df.iterrows():
-            mylist = [row.title, row.header] + embeddings[idx]
-            embeddings_dict.append(mylist)
-        edf = pd.DataFrame.from_records(embeddings_dict)
-        edf.to_csv(EMBEDDINGS_FILEPATH)
-
-if __name__ == '__main__':
-    createDataset()
+def createDataset(url:str, dbPrefix:str) -> None:
+    """
+    OK so this is supposed to be the main def that brings everything together. The way it should work is:
+    1. Connectes to the goddamn database
+    2. Checks to see if the articles table is already there
+        TODO: Is there a way we can add metadata to the table to label the articles with their source?
+    3. Check to see if the embeddings table is already there
+        TODO: Is there a way we can link this embeddings table to the articles table?
+    4. If the tables exist and everything is good we should return 
+    5. If there's no data we gotta build it all from scratch, including:
+        a) Fetch the data and unpack it
+        b) Parse the XML and extract the content
+        c) Clean the content, chunk larger paragraphs, and put it in the articles table
+        d) Get embeddings for all the data (thanks OpenAI!)
+        e) Save the embeddings to the embeddings table
+    6. The embeddings is going to take a long time. 
+        TODO: Make it an async process and have some way of monitoring progress
+    7. TODO: What should we return?
+    """
+    # First let's connect to the database
+    pool = connect_unix_socket()
+    insp = sqlalchemy.inspect(pool)
+    meta = sqlalchemy.MetaData()
+    articles_table = sqlalchemy.Table(f"{dbPrefix}_articles", meta)
+    embeddings_table = sqlalchemy.Table(f"{dbPrefix}_embeddings", meta)
+    if(~insp.has_table(articles_table, None)):
+    # Fetch the data from the url, parse it, clean it, chunk it, and pop it into a SQL table
+        try:
+            with pool.connect as db_conn:
+                url = 'https://s3.amazonaws.com/wikia_xml_dumps/c/ci/civilization_pages_current.xml.7z'
+                soup = getWikiAsSoup(url, Path('wiki.xml.7z'))
+                df = cleanData(soup.find_all('page'))
+                df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
+                #TODO: I'm sure there's a better way to do this other than iterrows
+                dfArray = []
+                for _, row in df.iterrows():
+                    dfArray.append(reduce_long(row))
+                df = pd.concat(dfArray)
+                #Yeet the rows of 20 tokens or fewer as those won't contain enough data to be useful
+                createDatabaseTable(f"{dbPrefix}_articles", df.loc[df.tokens > 20])
+                print(f"Successfully created table {dbPrefix}_artices")
+                #TODO: See if these two lines actually work or if they fuck everything up
+                os.remove("wiki.xml")
+                os.remove("wiki.xml.7z")
+        except:
+            return "Something went wrong creating the articles database, check the logs"
+    if(~insp.has_table(embeddings_table, None)):
+    # Time to make the embeddings babyyyy~~~
+        try:
+            cost = compute_cost_estimate(df)
+            print(f"Fetching embeddings for this document is estimated to cost USD: {cost}")
+            embeddings = compute_doc_embeddings(df)
+            embeddings_dict = []
+            for idx, row in df.iterrows():
+                mylist = [row.title, row.header] + embeddings[idx]
+                embeddings_dict.append(mylist)
+            edf = pd.DataFrame.from_records(embeddings_dict)
+            edf.to_csv(EMBEDDINGS_FILEPATH)
+        except:
+            print("Something went wrong creating the embeddings table. Check the logs")
