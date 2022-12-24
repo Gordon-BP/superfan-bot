@@ -13,6 +13,10 @@ numpy = "*"
 pandas = "*"
 torch = "*"
 pydantic = "*"
+mwparserfromhell = "*"
+pyunpack = "*"
+patool = "*"
+sqlalchemy = "*"
 
 [dev-packages]
 ipykernel = "*"
