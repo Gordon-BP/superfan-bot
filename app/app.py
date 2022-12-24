@@ -5,9 +5,8 @@ import openai
 import os
 from transformers import GPT2TokenizerFast
 
-openai.api_key = db_user = os.environ["OPENAI_TOKEN"] 
-
 def get_embedding(text: str) -> list[float]:
+    openai.api_key = os.environ["OPENAI_TOKEN"] 
     result = openai.Embedding.create(
       model="text-embedding-ada-002",
       input=text
@@ -96,6 +95,3 @@ def fetch_data_and_prompt_GPT(prompt:str, results: list[(float, (str, str))], co
             )
 
     return response["choices"][0]["text"].strip(" \n")
-
-
-

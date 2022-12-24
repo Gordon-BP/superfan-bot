@@ -2,7 +2,7 @@ import pandas as pd
 import re
 import os
 import sqlalchemy
-import ps8000
+import pg8000
 import mwparserfromhell
 from pyunpack import Archive
 from bs4 import BeautifulSoup, ResultSet
@@ -10,8 +10,7 @@ import requests
 from pathlib import Path
 from transformers import GPT2TokenizerFast
 from nltk.tokenize import sent_tokenize
-from app import get_embedding
-from apiKeys import XML_FILEPATH, EMBEDDINGS_FILEPATH, URI
+from .app import get_embedding
 
 def getWikiAsSoup(url:str, filepath:Path)-> BeautifulSoup:
   response = requests.get(url)
@@ -137,15 +136,6 @@ def reduce_long(dataSection: pd.Series,  max_len: int = 400) -> pd.DataFrame:
         pd.DataFrame of the split rows (or of the original row if its below max_len)
     """
     tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-    if not long_text_tokens:
-        long_text_tokens = len(tokenizer.encode(long_text))
-    if long_text_tokens > max_len:
-        sentences = sent_tokenize(long_text.replace("\n", " "))
-        ntokens = 0
-        for i, sentence in enumerate(sentences):
-            ntokens += 1 + len(tokenizer.encode(sentence))
-            if ntokens > max_len:
-                return ". ".join(sentences[:i][:-1]) + "."
     if dataSection.tokens <= max_len:
         return pd.DataFrame(dataSection)
     else:
@@ -181,10 +171,10 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
     unix_socket_path = os.environ["INSTANCE_UNIX_SOCKET"]  # e.g. '/cloudsql/project:region:instance'
 
     #Let's make sure folks actually set their variables in the yaml file...
-    assert db_user is not "TEST_USER_CHANGE_ME", "Invalid database username in cloudbuilder.yaml"
-    assert db_pass is not "hunter2", "Invalid database password in cloudbuilder.yaml"
-    assert db_name is not "DB_NAME_GOES_HERE", "Invalid database name in cloudbuilder.yaml"
-    assert unix_socket_path is not "PROJECT:REGION:INSTANCE", "Invalid socket path in cloudbuilder.yaml"
+    assert db_user != "TEST_USER_CHANGE_ME", "Invalid database username in cloudbuilder.yaml"
+    assert db_pass != "hunter2", "Invalid database password in cloudbuilder.yaml"
+    assert db_name != "DB_NAME_GOES_HERE", "Invalid database name in cloudbuilder.yaml"
+    assert unix_socket_path != "PROJECT:REGION:INSTANCE", "Invalid socket path in cloudbuilder.yaml"
 
     pool = sqlalchemy.create_engine(
         # Equivalent URL:
@@ -232,7 +222,7 @@ def compute_cost_estimate(df: pd.DataFrame) -> float:
     """
     return (df.tokens.sum()/1000)*0.0004
 
-def createDataset(url:str, dbPrefix:str) -> None:
+def createDataset(url:str, dbPrefix:str) -> str:
     """
     OK so this is supposed to be the main def that brings everything together. The way it should work is:
     1. Connectes to the goddamn database
@@ -260,21 +250,21 @@ def createDataset(url:str, dbPrefix:str) -> None:
     if(~insp.has_table(articles_table, None)):
     # Fetch the data from the url, parse it, clean it, chunk it, and pop it into a SQL table
         try:
-            with pool.connect as db_conn:
-                soup = getWikiAsSoup(url, Path('wiki.xml.7z'))
-                df = cleanData(soup.find_all('page'))
-                df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
-                #TODO: I'm sure there's a better way to do this other than iterrows
-                dfArray = []
-                for _, row in df.iterrows():
-                    dfArray.append(reduce_long(row))
-                df = pd.concat(dfArray)
-                #Yeet the rows of 20 tokens or fewer as those won't contain enough data to be useful
+            soup = getWikiAsSoup(url, Path('wiki.xml.7z'))
+            df = cleanData(soup.find_all('page'))
+            df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
+            #TODO: I'm sure there's a better way to do this other than iterrows
+            dfArray = []
+            for _, row in df.iterrows():
+                dfArray.append(reduce_long(row))
+            df = pd.concat(dfArray)
+            #Yeet the rows of 20 tokens or fewer as those won't contain enough data to be useful
+            with pool.connect() as db_conn:
                 df.loc[df.tokens > 20].to_sql(f"{dbPrefix}_articles", db_conn)
-                print(f"Successfully created table {dbPrefix}_artices")
-                #TODO: See if these two lines actually work or if they fuck everything up
-                os.remove("wiki.xml")
-                os.remove("wiki.xml.7z")
+                print(f"Successfully created table {dbPrefix}_articles")
+            #TODO: See if these two lines actually work or if they fuck everything up
+            os.remove("wiki.xml")
+            os.remove("wiki.xml.7z")
         except:
             return "Something went wrong creating the articles database, check the logs"
     if(~insp.has_table(embeddings_table, None)):
@@ -289,7 +279,11 @@ def createDataset(url:str, dbPrefix:str) -> None:
             for idx, row in df.iterrows():
                 mylist = [row.title, row.header] + embeddings[idx]
                 embeddings_dict.append(mylist)
-            edf = pd.DataFrame.from_records(embeddings_dict)
-            edf.to_csv(EMBEDDINGS_FILEPATH)
+            with pool.connect() as db_conn:
+                edf = pd.DataFrame.from_records(embeddings_dict)
+                edf.to_sql(f"{dbPrefix}_embeddings")
+                print(f"Successfully created table {dbPrefix}_embeddings")
         except:
             print("Something went wrong creating the embeddings table. Check the logs")
+            return "Something went wrong with the embeddings table. Check the logs"
+    
