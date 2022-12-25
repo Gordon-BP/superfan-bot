@@ -57,6 +57,7 @@ substitutions:
   _DATABASE_TYPE: postgres
   _DATABASE_PASSWORD_KEY: database_password
   _OPENAI_TOKEN_KEY: openai_token
+  _API_TOKEN_KEY: api_token
   _IMAGE_NAME: gcr.io/${PROJECT_ID}/sample-sql-proxy
 
 availableSecrets:
@@ -65,5 +66,7 @@ availableSecrets:
       env: DATABASE_PASS
     - versionName: projects/$PROJECT_ID/secrets/${_OPENAI_TOKEN_KEY}/versions/latest
       env: OPENAI_TOKEN
+    - versionName: projects/$PROJECT_ID/secrets/${_API_TOKEN_KEY}/versions/latest
+      env: API_TOKEN
 images:
   - gcr.io/${PROJECT_ID}/github.com/Gordon-BP/superfan-bot

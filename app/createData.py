@@ -2,12 +2,14 @@ import pandas as pd
 import re
 import os
 import sqlalchemy
-import pg8000
+from dotenv import load_dotenv
 import mwparserfromhell
 from pyunpack import Archive
 from bs4 import BeautifulSoup, ResultSet
 import requests
 from pathlib import Path
+from google.cloud.sql.connector import Connector, IPTypes
+import pg8000
 from transformers import GPT2TokenizerFast
 from nltk.tokenize import sent_tokenize
 from .app import get_embedding
@@ -166,29 +168,50 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
     # Note: These env variables are defined in cloudbuilder.yaml
     # Except for the password, you have to make that in the secret manager
     # Cloud Secret Manager (https://cloud.google.com/secret-manager)
-    db_user = "new-user" #os.environ["DATABASE_USER"]  # e.g. 'my-database-user'
-    db_pass = "E^\#d974T&xUS^vKZLE@kbADx5" #os.environ["DATABASE_PASS"]  # e.g. 'my-database-password'
-    db_name = "database1" #os.environ["DATABASE_NAME"]  # e.g. 'my-database'
-    unix_socket_path = "/cloudsql/superfan-bot:us-central1:civ6-wikia" #os.environ["INSTANCE_CONNECTION_NAME"]  # e.g. '/cloudsql/project:region:instance'
+    load_dotenv()
+    db_user = os.environ["DATABASE_USER"]  # e.g. 'my-database-user'
+    db_pass = os.environ["DATABASE_PASS"]  # e.g. 'my-database-password'
+    db_name = os.environ["DATABASE_NAME"]  # e.g. 'my-database'
+    instance_connection_name = os.environ["INSTANCE_CONNECTION_NAME"]  # e.g. '/cloudsql/project:region:instance'
+    ip_type = IPTypes.PUBLIC
     #Let's make sure folks actually set their variables in the yaml file...
     assert db_user != "TEST_USER_CHANGE_ME", "Invalid database username in cloudbuilder.yaml"
     assert db_pass != "hunter2", "Invalid database password in cloudbuilder.yaml"
     assert db_name != "DB_NAME_GOES_HERE", "Invalid database name in cloudbuilder.yaml"
-    assert unix_socket_path != "PROJECT:REGION:INSTANCE", "Invalid socket path in cloudbuilder.yaml"
-    pool = sqlalchemy.create_engine(
-        # Equivalent URL:
-        # postgresql+pg8000://<db_user>:<db_pass>@/<db_name>
-        #                         ?unix_sock=<INSTANCE_UNIX_SOCKET>/.s.PGSQL.5432
-        sqlalchemy.engine.url.URL.create(
-            drivername="postgresql+pg8000",
-            username=db_user,
+    assert instance_connection_name != "PROJECT:REGION:INSTANCE", "Invalid socket path in cloudbuilder.yaml"
+    
+    connector = Connector()
+    def getconn() -> pg8000.dbapi.Connection:
+        conn: pg8000.dbapi.Connection = connector.connect(
+            instance_connection_name,
+            "pg8000",
+            user=db_user,
             password=db_pass,
-            database=db_name,
-            query={"unix_sock": "{}/.s.PGSQL.5432".format(unix_socket_path)}
+            db=db_name,
+            ip_type=ip_type,
         )
-        # ...
-    )
+        return conn
+    pool = sqlalchemy.create_engine(
+        "postgresql+pg8000://",
+        creator=getconn,
+        # [START_EXCLUDE]
+        # Pool size is the maximum number of permanent connections to keep.
+        pool_size=5,
+        # Temporarily exceeds the set pool_size if no connections are available.
+        max_overflow=2,
+
+        # 'pool_timeout' is the maximum number of seconds to wait when retrieving a
+        # new connection from the pool. After the specified amount of time, an
+        # exception will be thrown.
+        pool_timeout=30,  # 30 seconds
+
+        # 'pool_recycle' is the maximum number of seconds a connection can persist.
+        # Connections that live longer than the specified amount of time will be
+        # re-established
+        pool_recycle=1800,  # 30 minutes
+        )
     return pool
+
 
 def compute_doc_embeddings(df: pd.DataFrame) -> dict[tuple[str, str], list[float]]:
     """

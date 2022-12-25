@@ -22,6 +22,7 @@ bs4 = "*"
 nltk = "*"
 python-dotenv = "*"
 "google.auth" = "*"
+cloud-sql-python-connector = {extras = ["pymysql"], version = "*"}
 
 [dev-packages]
 ipykernel = "*"

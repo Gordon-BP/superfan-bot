@@ -1,12 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from .app import get_embedding
+from dotenv import load_dotenv
+import os
 from .createData import createDataset, connect_unix_socket
 app = FastAPI()
+load_dotenv()
+api_token = os.environ['API_TOKEN']
 
 @app.get("/")
-def root():
-    return {"message": "Hello World"}
+def root(authToken:str):
+    return {"message": "Hello World"} #if authToken == api_token else None
 
 @app.get("/api/v1/rawArticle/{id}")
 def getRawArticle(id:int):
@@ -20,9 +24,9 @@ def getRawArticle(id:int):
     """
     pool = connect_unix_socket()
     with pool.connect() as db_conn:
-        result = "Oh shit bois we connected!!"
-        #db_conn.execute(f"SELECT * FROM civ6_articles WHERE id = {id}")        
-    return result
+        print( "Oh shit bois we connected!!")
+        results = db_conn.execute(f"SELECT * FROM articles WHERE articles.id = {id}")     
+    return results.all()
 
 @app.post("/testAnswer/{prompt}")
 def get_top3_docs(prompt: str) -> dict:
