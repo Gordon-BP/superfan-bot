@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 import os
 from .createData import createDataset, connect_unix_socket
 app = FastAPI()
-load_dotenv()
+load_dotenv() # For local dev only
 api_token = os.environ['API_TOKEN']
 
 @app.get("/")
@@ -49,4 +49,4 @@ def get_top3_docs(prompt: str) -> dict:
         }
 @app.post("/api/v1/createData")
 def createData(url:str, tableName:str):
-    return "Lol nope" #createDataset(url, tableName)
+    return createDataset(url, tableName)

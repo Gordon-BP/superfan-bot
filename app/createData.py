@@ -11,14 +11,15 @@ from pathlib import Path
 from google.cloud.sql.connector import Connector, IPTypes
 import pg8000
 from transformers import GPT2TokenizerFast
-from nltk.tokenize import sent_tokenize
 from .app import get_embedding
 
 def getWikiAsSoup(url:str, filepath:Path)-> BeautifulSoup:
-  response = requests.get(url)
-  filepath.write_bytes(response.content)
-  Archive(filepath).extractall("./")
-  return BeautifulSoup(open("wiki.xml"), "lxml")
+  #response = requests.get(url)
+  #TODO: Logic to break if status is not 200
+  #filepath.write_bytes(response.content)
+  #Archive(filepath).extractall("./data/")
+  soup = BeautifulSoup(open("./data/wiki.xml"), "lxml")
+  return soup
 
 def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
   """
@@ -128,36 +129,41 @@ def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
         counter +=1
   return pd.DataFrame.from_records(dataArr)
 
-def reduce_long(dataSection: pd.Series,  max_len: int = 400) -> pd.DataFrame:
+def fast_chonk(row:pd.Series, tokenizer:GPT2TokenizerFast) -> list[dict]:
     """
-    Takes a large paragraph and splits it into multiple smaller ones by sentence.
+    Super fast content chunker!
+
     Parameters:
-        dataSection(pd.Series): A row of the dataframe with the articles data in it
-        max_len(int): the maximum size for the paragraphs. It's not followed super closely so if you have a hard limit give it some room. 400 by default
-    Returns:
-        pd.DataFrame of the split rows (or of the original row if its below max_len)
+        row(pd.Series): a row of your data whose text needs chunkin'
+        tokenizer(GPT2TokenizerFast): the tokenizer, use .from_pretrained("gpt2")
+    Returns
+        list[dict]: a list of dicts with your new, chunked text. Looks like this:
+        [{
+            title: Lorem Ipsum,
+            heading: Unum 1,
+            text: blah blah blah,
+            tokens: 
+        }]
     """
-    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-    if dataSection.tokens <= max_len:
-        return pd.DataFrame(dataSection)
-    else:
-        dataArr = []
-        sentences = sent_tokenize(dataSection.text.str.replace("\n", " "))
-        ntokens = 0
-        counter = 0
-        last_idx = 0
-        for i, sentence in enumerate(sentences):
-            ntokens += 1 + len(tokenizer.encode(sentence))
-            if ntokens > max_len:
-                counter += 1
-                last_idx=i
-                dataArr.append({
-                    "id":dataSection.id,
-                    "title":dataSection.title,
-                    "heading":dataSection.heading + " " + str(counter),
-                    "text":". ".join(sentences[last_idx:i])
-                    })
-        return pd.DataFrame.from_records(dataArr)
+    print(f"Chunking {row.title} - {row.heading}...")
+    sentences = row.text.split(". ")
+    bigSentence = ""
+    chunks = []
+    for idx, sentence in enumerate(sentences):
+        length = len(tokenizer.encode(sentence))
+        if len(bigSentence) + length < 400:
+            bigSentence = bigSentence + ". " + sentence
+        else:
+            chunks.append({
+                "id":row.id,
+                "title":row.title,
+                "heading":str(row.heading) + " " + str(idx+1),
+                "text": bigSentence,
+                "tokens": len(tokenizer.encode(bigSentence))
+            })
+            bigSentence = sentence
+
+    return chunks
 
 def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
     """
@@ -168,7 +174,7 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
     # Note: These env variables are defined in cloudbuilder.yaml
     # Except for the password, you have to make that in the secret manager
     # Cloud Secret Manager (https://cloud.google.com/secret-manager)
-    load_dotenv()
+    load_dotenv() # this is only good for local development
     db_user = os.environ["DATABASE_USER"]  # e.g. 'my-database-user'
     db_pass = os.environ["DATABASE_PASS"]  # e.g. 'my-database-password'
     db_name = os.environ["DATABASE_NAME"]  # e.g. 'my-database'
@@ -212,7 +218,6 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
         )
     return pool
 
-
 def compute_doc_embeddings(df: pd.DataFrame) -> dict[tuple[str, str], list[float]]:
     """
     Create an embedding for each row in the dataframe using the OpenAI Embeddings API.
@@ -229,6 +234,7 @@ def compute_doc_embeddings(df: pd.DataFrame) -> dict[tuple[str, str], list[float
     return {
         idx: get_embedding(r.text.replace("\n", " ")) for idx, r in df.iterrows()
     }
+
 def compute_cost_estimate(df: pd.DataFrame) -> float:
     """
     Makes an estimated cost for fetching embeddings for the entire dataframe. Uses the price for
@@ -260,33 +266,49 @@ def createDataset(url:str, dbPrefix:str) -> str:
         TODO: Make it an async process and have some way of monitoring progress
     7. TODO: What should we return?
     """
-    # First let's connect to the database
+    print("First let's connect to the database")
     pool = connect_unix_socket()
     insp = sqlalchemy.inspect(pool)
     meta = sqlalchemy.MetaData()
+    print("Next let's see if our tables are already there")
     articles_table = sqlalchemy.Table(f"{dbPrefix}_articles", meta)
     embeddings_table = sqlalchemy.Table(f"{dbPrefix}_embeddings", meta)
     if(~insp.has_table(articles_table, None)):
     # Fetch the data from the url, parse it, clean it, chunk it, and pop it into a SQL table
-        try:
-            soup = getWikiAsSoup(url, Path('wiki.xml.7z'))
-            df = cleanData(soup.find_all('page'))
-            df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
-            #TODO: I'm sure there's a better way to do this other than iterrows
-            dfArray = []
-            for _, row in df.iterrows():
-                dfArray.append(reduce_long(row))
-            df = pd.concat(dfArray)
-            #Yeet the rows of 20 tokens or fewer as those won't contain enough data to be useful
-            with pool.connect() as db_conn:
-                df.loc[df.tokens > 20].to_sql(f"{dbPrefix}_articles", db_conn)
-                print(f"Successfully created table {dbPrefix}_articles")
-            #TODO: See if these two lines actually work or if they fuck everything up
-            os.remove("wiki.xml")
-            os.remove("wiki.xml.7z")
-        except:
-            return "Something went wrong creating the articles database, check the logs"
-    if(~insp.has_table(embeddings_table, None)):
+        #try:
+        print(f"Fetching data from {url}...")
+        soup = getWikiAsSoup(url, Path('./data/wiki.xml.7z'))
+        print("Clening data...")
+        df = cleanData(soup.find_all('page'))
+        df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
+        #TODO: I'm sure there's a better way to do this other than iterrows
+        dfArray = []
+        tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+        print("Tokenizing data...")
+        df['tokens'] = df.text.apply(lambda x:len(tokenizer.encode(x)))
+        print("Chunking long passages...")
+        df_short = df.loc[(df.tokens <= 400) & (df.tokens >= 20)]
+        df_long = df.loc[df.tokens >= 400]
+        chunks = []
+        for _, row in df_long.iterrows():
+            chunks = chunks + fast_chonk(row, tokenizer)
+        #for _, row in df.iterrows():
+         #   dfArray.append(reduce_long(row))
+        df_chunks = pd.DataFrame.from_records(chunks)
+        df = pd.concat([df_short, df_chunks])
+        print(f"Final data created with shape {df.shape}. Now inserting into database....")
+        #Yeet the rows of 20 tokens or fewer as those won't contain enough data to be useful
+        print("Pushing data to a new table....")
+
+        df.iloc[0:1000].to_sql(f"{dbPrefix}_articles", pool, if_exists='append', index=False, chunksize=100)
+        print(f"Successfully created table {dbPrefix}_articles")
+        #TODO: See if these two lines actually work or if they fuck everything up
+        os.remove("./data/wiki.xml")
+        os.remove("./data/wiki.xml.7z")
+        return "Success? Check your database!"
+       # except:
+        #    return "Something went wrong creating the articles database, check the logs"
+"""  if(~insp.has_table(embeddings_table, None)):
     # Time to make the embeddings babyyyy~~~
         try:
             cost = compute_cost_estimate(df)
@@ -305,4 +327,4 @@ def createDataset(url:str, dbPrefix:str) -> str:
         except:
             print("Something went wrong creating the embeddings table. Check the logs")
             return "Something went wrong with the embeddings table. Check the logs"
-    
+  """  

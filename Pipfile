@@ -19,10 +19,10 @@ patool = "*"
 sqlalchemy = "*"
 pg8000 = "*"
 bs4 = "*"
-nltk = "*"
 python-dotenv = "*"
 "google.auth" = "*"
 cloud-sql-python-connector = {extras = ["pymysql"], version = "*"}
+lxml = "*"
 
 [dev-packages]
 ipykernel = "*"
