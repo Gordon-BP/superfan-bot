@@ -304,7 +304,7 @@ def createDataset(url:str, dbPrefix:str) -> str:
         print(f"Final data created with shape {df.shape}. Now inserting into database....")
         #Yeet the rows of 20 tokens or fewer as those won't contain enough data to be useful
         print("Pushing data to a new table....")
-        df.iloc[0:1000].to_sql(f"{dbPrefix}_articles", pool, if_exists='append', index=False, chunksize=100)
+        df.to_sql(f"{dbPrefix}_articles", pool, if_exists='replace', index=False, chunksize=100)
         
         print(f"Successfully created table {dbPrefix}_articles")
         #TODO: See if these two lines actually work or if they fuck everything up
