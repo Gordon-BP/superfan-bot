@@ -14,12 +14,15 @@ from transformers import GPT2TokenizerFast
 from .app import get_embedding
 
 def getWikiAsSoup(url:str, filepath:Path)-> BeautifulSoup:
-  #response = requests.get(url)
-  #TODO: Logic to break if status is not 200
-  #filepath.write_bytes(response.content)
-  #Archive(filepath).extractall("./data/")
-  soup = BeautifulSoup(open("./data/wiki.xml"), "lxml")
-  return soup
+  response = requests.get(url)
+  if(requests.status != 200):
+    print("Provided URL is not valid")
+    raise ValueError 
+  else:  
+    filepath.write_bytes(response.content)
+    Archive(filepath).extractall("./data/")
+    soup = BeautifulSoup(open("./data/wiki.xml"), "lxml")
+    return soup
 
 def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
   """
