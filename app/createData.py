@@ -273,44 +273,45 @@ def createDataset(url:str, dbPrefix:str) -> str:
     pool = connect_unix_socket()
     insp = sqlalchemy.inspect(pool)
     meta = sqlalchemy.MetaData()
+    
     print("Next let's see if our tables are already there")
     articles_table = sqlalchemy.Table(f"{dbPrefix}_articles", meta)
     embeddings_table = sqlalchemy.Table(f"{dbPrefix}_embeddings", meta)
     if(~insp.has_table(articles_table, None)):
     # Fetch the data from the url, parse it, clean it, chunk it, and pop it into a SQL table
-        #try:
         print(f"Fetching data from {url}...")
         soup = getWikiAsSoup(url, Path('./data/wiki.xml.7z'))
+        
         print("Clening data...")
         df = cleanData(soup.find_all('page'))
         df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
         #TODO: I'm sure there's a better way to do this other than iterrows
         dfArray = []
         tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+        
         print("Tokenizing data...")
         df['tokens'] = df.text.apply(lambda x:len(tokenizer.encode(x)))
+       
         print("Chunking long passages...")
         df_short = df.loc[(df.tokens <= 400) & (df.tokens >= 20)]
         df_long = df.loc[df.tokens >= 400]
         chunks = []
         for _, row in df_long.iterrows():
             chunks = chunks + fast_chonk(row, tokenizer)
-        #for _, row in df.iterrows():
-         #   dfArray.append(reduce_long(row))
         df_chunks = pd.DataFrame.from_records(chunks)
         df = pd.concat([df_short, df_chunks])
+        
         print(f"Final data created with shape {df.shape}. Now inserting into database....")
         #Yeet the rows of 20 tokens or fewer as those won't contain enough data to be useful
         print("Pushing data to a new table....")
-
         df.iloc[0:1000].to_sql(f"{dbPrefix}_articles", pool, if_exists='append', index=False, chunksize=100)
+        
         print(f"Successfully created table {dbPrefix}_articles")
         #TODO: See if these two lines actually work or if they fuck everything up
         os.remove("./data/wiki.xml")
         os.remove("./data/wiki.xml.7z")
         return "Success? Check your database!"
-       # except:
-        #    return "Something went wrong creating the articles database, check the logs"
+
 """  if(~insp.has_table(embeddings_table, None)):
     # Time to make the embeddings babyyyy~~~
         try:
