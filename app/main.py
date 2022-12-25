@@ -49,4 +49,5 @@ def get_top3_docs(prompt: str) -> dict:
         }
 @app.post("/api/v1/createData")
 def createData(url:str, tableName:str):
-    return createDataset(url, tableName)
+    createDataset(url, tableName)
+    return "Finished creating the articles table- check your database"
