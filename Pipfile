@@ -23,6 +23,9 @@ python-dotenv = "*"
 "google.auth" = "*"
 cloud-sql-python-connector = {extras = ["pymysql"], version = "*"}
 lxml = "*"
+update = "*"
+pipenv = "*"
+jupyter = "*"
 
 [dev-packages]
 ipykernel = "*"

@@ -11,15 +11,19 @@ import requests
 from pathlib import Path
 from google.cloud.sql.connector import Connector, IPTypes
 import pg8000
+import logging as log
 from transformers import GPT2TokenizerFast
 from .app import get_embedding
+logging_client = logging.Client()
+logging_client.setup_logging()
 
 def getWikiAsSoup(url:str, filepath:Path)-> BeautifulSoup:
+  log.info(f"Fetching file from {url}...")
   response = requests.get(url)
   if(response.status_code != 200):
-    print("Provided URL is not valid")
+    log.error("Provided URL is not valid")
     raise ValueError 
-  else:  
+  else: 
     filepath.write_bytes(response.content)
     Archive(filepath).extractall("./data/")
     soup = BeautifulSoup(open("./data/wiki.xml"), "lxml")
@@ -70,7 +74,7 @@ def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
                 collapse=True,
                 keep_template_params=False)
             if((len(text) < 20) or ("REDIRECT" in text)):
-              print(f"Skipping {title} - {heading}")
+              log.debug(f"Skipping {title} - {heading}")
             dataArr.append({
                   "id":int(id),
                   "title":str(title),
@@ -86,7 +90,7 @@ def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
                 keep_template_params=False)
             # There's a few criteria for whether or not we want to keep this data
             if((heading in badHeadings) or (len(text) < 20) or ("REDIRECT" in text)):
-              print(f"Skipping {title} - {heading}")
+              log.debug(f"Skipping {title} - {heading}")
             else:
               dataArr.append({
                   "id":int(id),
@@ -112,7 +116,7 @@ def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
                   heading = re.sub(r"=",'', subheader)
                   text = mwparserfromhell.parse(subsubcontent[0]).strip_code()
                   if((heading in badHeadings) or (len(text) < 20) or ("REDIRECT" in text)):
-                    print(f"Skipping {title} - {subheader} - {heading}")
+                    log.debug(f"Skipping {title} - {subheader} - {heading}")
                   dataArr.append({
                     "id":int(id),
                     "title":str(title),
@@ -129,7 +133,7 @@ def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
                         "text": str(re.sub("\n",'',mwparserfromhell.parse(subsubsubcontent).strip_code()))
                     })
       except:
-        print(f"Error processing page {page.title.contents[0]}")
+        log.warn(f"Something went wrong processing {page.title.contents[0]}")
         counter +=1
   return pd.DataFrame.from_records(dataArr)
 
@@ -149,7 +153,7 @@ def fast_chonk(row:pd.Series, tokenizer:GPT2TokenizerFast) -> list[dict]:
             tokens: 79
         }]
     """
-    print(f"Chunking {row.title} - {row.heading}...")
+    log.debug(f"Chunking {row.title} - {row.heading}...")
     sentences = row.text.split(". ")
     bigSentence = ""
     chunks = []
@@ -203,20 +207,10 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
     pool = sqlalchemy.create_engine(
         "postgresql+pg8000://",
         creator=getconn,
-        # [START_EXCLUDE]
-        # Pool size is the maximum number of permanent connections to keep.
         pool_size=50,
-        # Temporarily exceeds the set pool_size if no connections are available.
         max_overflow=10,
-
-        # 'pool_timeout' is the maximum number of seconds to wait when retrieving a
-        # new connection from the pool. After the specified amount of time, an
-        # exception will be thrown.
         pool_timeout=30,  # 30 seconds
         future=True,
-        # 'pool_recycle' is the maximum number of seconds a connection can persist.
-        # Connections that live longer than the specified amount of time will be
-        # re-established
         pool_recycle=1800,  # 30 minutes
         )
     return pool
@@ -225,7 +219,7 @@ def compute_doc_embeddings(df: pd.DataFrame) -> dict[tuple[str, str], list[float
     """
     Create an embedding for each row in the dataframe using the OpenAI Embeddings API.
     Return a dictionary that maps between each embedding vector and the index of the row that it corresponds to.
-    TODO: make this async or something
+    TODO: make this async or something? Maybe the async comes in how we call this function...
 
     Parameters:
         df(pd.DataFrame): The data to embed. Should look like:
@@ -250,50 +244,43 @@ def compute_cost_estimate(df: pd.DataFrame) -> float:
     """
     return (df.tokens.sum()/1000)*0.0004
 
-def createDataset(url:str, dbPrefix:str) -> str:
+def createDataset(url:str, dbPrefix:str, overrideTables:bool=False) -> dict:
     """
-    OK so this is supposed to be the main def that brings everything together. The way it should work is:
-    1. Connectes to the goddamn database ✅
-    2. Checks to see if the articles table is already there ✅
-        TODO: Is there a way we can add metadata to the table to label the articles with their source?
-    3. Check to see if the embeddings table is already there
-        TODO: Is there a way we can link this embeddings table to the articles table?
-    4. If the tables exist and everything is good we should return 
-    5. If there's no data we gotta build it all from scratch, including:
-        a) Fetch the data and unpack it ✅
-        b) Parse the XML and extract the content ✅
-        c) Clean the content, chunk larger paragraphs, and put it in the articles table ✅
-        d) Get embeddings for all the data (thanks OpenAI!)
-        e) Save the embeddings to the embeddings table
-    6. The embeddings is going to take a long time. 
+    This is supposed to be the main function that:
+    1. Fetches the XML data from the provided URL ✅
+    2. Parses the data, cleans it, breaks it into chunks, and measures the size ✅
+    3. Uploads the data to a table in a Cloud SQL Postgres database ✅
+    4. Calls the OpenAI Embeddings endpoint to get embeddings for each chunk 🟨
+    5. Saves the embeddings to a table in a Cloud SQL Postgrest database 🟨
+    6. Returns a JSON object detailing the table names and sizes 🟨
         TODO: Make it an async process and have some way of monitoring progress
-    7. TODO: What should we return?
+    
+    Parameters:
+        url(str): The url where the wiki's XML is hosted. Usually an amazon s3 container
+        dbPrefix(str): Used in the two tables created: dbPrefix_articles and dbPrefix_embeddings
+        overrideTables(bool): If the tables already exist, setting this to True will have the system ovrride it. False by default
+    
+    Returns
+        dict: a JSON object detailing the completed table names and size.
     """
-    # because postgres will die if it sees a capital letter...
-    dbPrefix = str.lower(dbPrefix)
-    print("First let's connect to the database")
+    dbPrefix = str.lower(dbPrefix) # because postgres will die if it sees a capital letter...
+    returnDict = {}
     pool = connect_unix_socket()
     insp = sqlalchemy.inspect(pool)
     meta = sqlalchemy.MetaData()
-    
-    print("Next let's see if our tables are already there")
     articles_table = sqlalchemy.Table(f"{dbPrefix}_articles", meta)
     embeddings_table = sqlalchemy.Table(f"{dbPrefix}_embeddings", meta)
-    print(f"Status for table {articles_table} is {insp.has_table(articles_table, None)}")
-    if(~insp.has_table(articles_table, None)):
-    # Fetch the data from the url, parse it, clean it, chunk it, and pop it into a SQL table
-        print(f"Fetching data from {url}...")
-        soup = getWikiAsSoup(url, Path('./data/wiki.xml.7z'))
-        
-        print("Clening data...")
-        df = cleanData(soup.find_all('page'))
+    log.info(f"Status for table {articles_table} is {insp.has_table(articles_table, None)}")
+    log.info(f"Status for table {embeddings_table} is {insp.has_table(embeddings_table, None)}")
+    
+    if(not(insp.has_table(articles_table, None)) or overrideTables):
+        log.info(f"Creating new tables or overriding existing ones...")
+        soup = getWikiAsSoup(url, Path('./data/wiki.xml.7z')) #Fetch the data
+        df = cleanData(soup.find_all('page')) #Clean the data
         df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
         tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-        
-        print("Tokenizing data...")
-        df['tokens'] = df.text.apply(lambda x:int(len(tokenizer.encode(x))))
-       
-        print("Chunking long passages...")
+        df['tokens'] = df.text.apply(lambda x:int(len(tokenizer.encode(x)))) #Get token count to find articles with long subsections
+        #TODO make these numbers parameters? Maybe?
         df_short = df.loc[(df.tokens <= 400) & (df.tokens >= 20)]
         df_long = df.loc[df.tokens >= 400]
         chunks = []
@@ -302,93 +289,52 @@ def createDataset(url:str, dbPrefix:str) -> str:
         df_chunks = pd.DataFrame.from_records(chunks)
         df = pd.concat([df_short, df_chunks])
         df.drop("index", axis=1, inplace=True)
-        print(f"Final data created with shape {df.shape}. Now inserting into database....")
-        #df.columns = ['id', 'title', 'heading', 'text', 'tokens']
-        print(df.head())
-        print(df.columns)
-        df.reset_index(drop=True)
-        #Yeet the rows of 20 tokens or fewer as those won't contain enough data to be useful
-        print("Pushing data to a new table....")
-        """ n = 100  #chunk row size
-        list_df = [df[i:i+n] for i in range(0,df.shape[0],n)]
-        with pool.begin() as conn:
-                conn.execute(sqlalchemy.text(f"
-                CREATE TABLE IF NOT EXISTS {dbPrefix}_articles
-            (
-                id integer,
-                title text,
-                heading text,
-                text text,
-                tokens integer
-            )
-                "))
-        count = 0
-        for chunk in list_df:
-        #TODO get this set up with events or smth so I can make a loading bar
-        #JK that would mean creating a UI first lmao
-        #TODO parallel processing so that this goes faster. Uploading 100 rows of data is ~10 seconds rn
-        # if this iss going to scale we need to be able to do at LEAST 10,000 rows per min
-        # at least the transaction is committed every 100 rows so if it stops halfway the data is still there.
-            count +=1
-            print(f"Uploading chunk {count} of {len(list_df)}")
-            with pool.begin() as conn:
-                chunk.to_sql(
-                    f"{dbPrefix}_articles", conn, 
-                    if_exists='append', 
-                    index=False,
-                    method='multi',
-                    chunksize=10,
-                    dtype = {
-                        "id":sqlalchemy.types.INTEGER(),
-                        "title":sqlalchemy.types.TEXT(),
-                        "heading":sqlalchemy.types.TEXT(),
-                        "text":sqlalchemy.types.TEXT(),
-                        "tokens":sqlalchemy.types.INTEGER()
-                    }
-                    )
-                print("Chunk loaded, moving on....")"""
-        # Lets try to speed this up using COPY
-        print("Dropping old table and making a new one...")
+        df.reset_index(drop=True)  
+        log.info(f"Articles data created with shape {df.shape}. Now inserting into database....")
+
         with pool.connect() as conn:
-            df.head(0).to_sql(
-            f'{dbPrefix}_copy', conn, 
-            if_exists='replace',
-            index=False,
-            dtype={
-                'id':sqlalchemy.types.INTEGER(),
-                'title':sqlalchemy.types.TEXT(),
-                'heading':sqlalchemy.types.TEXT(),
-                'text':sqlalchemy.types.TEXT(),
-                'tokens':sqlalchemy.types.INTEGER()
-            }) #drops old table and creates new empty table
+            log.debug("Creating articles table...")
+            df.head(0).to_sql(  #drops old table and creates new empty table
+                f'{dbPrefix}_articles', conn, 
+                if_exists='replace',
+                index=False,
+                dtype={
+                    'id':sqlalchemy.types.INTEGER(),#TODO: is integer the best type here? Or would numeric be better? Does it matter?...
+                    'title':sqlalchemy.types.TEXT(),
+                    'heading':sqlalchemy.types.TEXT(),
+                    'text':sqlalchemy.types.TEXT(),
+                    'tokens':sqlalchemy.types.INTEGER()
+                }) 
             conn.commit()
-        #print(f"Status for table {articles_table} is {insp.has_table(dbPrefix+"_copy", None)}")
+        # pg8000 doesn't let sqlalchemy do COPY in a pretty way so we gotta do it like this
+        log.debug("Copying articles into articles table...")
         rawConn = pool.raw_connection()
         rawCur = rawConn.cursor()
-        print("Now to instance the cursor and start the copy....")
         output = StringIO()
         df.to_csv(output, sep=',', header=False, index=False, encoding='UTF-8')
-        print("stream prepped & ready...")
         output.seek(0)
-        print("Executing...")
         rawCur.execute(f"""
-            COPY {dbPrefix}_copy 
+            COPY {dbPrefix}_articles 
             FROM stdin 
             WITH(format csv, DELIMITER ',')""", 
             stream = output)
-        print("closing....")
         rawConn.commit()
         rawConn.close()
+  
+        log.info(f"Successfully inserted data into table {dbPrefix}_articles")
 
-            
-        print(f"Successfully inserted data into table {dbPrefix}_copy")
-        #print(f"Status for table {articles_table} is {insp.has_table(articles_table, None)}")
-        #TODO: See if these two lines actually work or if they fuck everything up
         os.remove("./data/wiki.xml")
         os.remove("./data/wiki.xml.7z")
         #TODO: Is there a way to clear the memory so we're not keeping the giant articles df around?
-        return "Success? Check your database!"
-
+        returnDict[0] = {
+            "tableName":f"{dbPrefix}_articles",
+            "rowCount":df.shape[0],
+            "colCount":df.shape[1]
+        }
+    return returnDict
+    # And here's the code that will fetch the embeddings!
+    # it's also horribly wrong and slow and just a goddamn mess
+    # I will fix it tomorrow!
 """  if(~insp.has_table(embeddings_table, None)):
     # Time to make the embeddings babyyyy~~~
         try:
@@ -409,3 +355,4 @@ def createDataset(url:str, dbPrefix:str) -> str:
             print("Something went wrong creating the embeddings table. Check the logs")
             return "Something went wrong with the embeddings table. Check the logs"
   """  
+    
