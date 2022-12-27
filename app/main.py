@@ -24,29 +24,10 @@ def getRawArticle(id:int):
     """
     pool = connect_unix_socket()
     with pool.connect() as db_conn:
-        print( "Oh shit bois we connected!!")
+        print("Oh shit bois we connected!!")
         results = db_conn.execute(f"SELECT * FROM articles WHERE articles.id = {id}")     
     return results.all()
 
-@app.post("/testAnswer/{prompt}")
-def get_top3_docs(prompt: str) -> dict:
-    return {
-        0:{ 
-            "Confidence":0.0835,
-            "title":"Cheese",
-            "heading": "Summary",
-            "text":"Cheese has been around since the early ages of humanity"},
-        1:{
-            "Confidence":0.0665,
-            "title":"Milk",
-            "heading": "Production",
-            "text":"Milk comes out of cows, though sometimes goats as well"},
-        2:{
-            "Confidence":0.0465,
-            "title":"Soymilk",
-            "heading": "History",
-            "text":"Soymilk is arguably older than dairy milk, as plants ruled the Earth first"}
-        }
 @app.post("/api/v1/createData")
 def createData(url:str, tableName:str):
     createDataset(url, tableName)
