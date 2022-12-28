@@ -1,5 +1,5 @@
 # 
-FROM python:3.10
+FROM python:3.10 as base
 # 
 # Setup env
 ENV LANG C.UTF-8
