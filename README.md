@@ -6,13 +6,23 @@ This project is built on top of Google Cloud and will require a GCP account with
 ## This project built to be production-ready!
 Jupyter Notebooks are for kindergardeners, this project is built for the real-world with production-ready features like:
 1. Built on Google Cloud Project, so it can scale with the power of the Goog
-2. Lives in a Docker container for easy deployment and CI/CD
-3. Postgres database runs on Google Cloud SQL for even more scaling and accessibility
+2. Endpoints for everything, powered by FastAPI
+3. Lives in a Docker container for easy deployment and CI/CD
+4. Postgres database runs on Google Cloud SQL for even more scaling and accessibility
 
 ## What's left?
-* Write a cool parallel, async process for fetching the embeddings before the user dies or old age
-* Set up a discord bot that regurgitates GPT's answer along with some fancy formatting.
+* There's probably a few things needed to hook up a Discord bot to the endpoints...
+* Extra config things in the dockerfile or .yaml file
+* Implement a caching layer for faster answers
+* Fetch embeddings from OpenAI's endpoint using parallel workers (_without_ incurring ludicrous charges)
+* Automatically provision an SQL server in one of the .yaml files to ease setup. I should really also look into seeing how much setup I can automate in the .yamls files...
+* Smol boi AI model for fine-tuning the embeddings
+* Google sheet that hooks up to said smoll boi to provide training data
+* Unit tests & automatic testing
+* Some kind of authentication on the endpoints that create new database tables
 * Optimize the cleanin regex patterns to get rid of all the moustache placeholders and other formatting BS
+
+## Oh geez that's a lot of things! Good thing I'm doing this project entirely in my free time and have no stakeholders or KPIs to meet 😁😁😁
 
 ## How to get it all set up:
 Bless your heart for showing interest ❤️ We're still pre-release so this is gonna be rough...

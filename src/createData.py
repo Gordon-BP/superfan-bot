@@ -19,7 +19,7 @@ import concurrent.futures
 import asyncio
 import logging as log
 from transformers import GPT2TokenizerFast
-from .app import get_embedding
+from app import get_embedding
 log = logging.getLogger("uvicorn.info")
 #handler = logging.StreamHandler()
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
