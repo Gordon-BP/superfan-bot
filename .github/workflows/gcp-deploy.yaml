@@ -33,7 +33,7 @@ jobs:
           run: docker build . -t $IMAGE_NAME
 
         - name: Test Docker image
-          run: docker run $IMAGE_NAME sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8080"
+          run: docker run $IMAGE_NAME sh -c "uvicorn main:app --host 0.0.0.0 --port 8080"
 
         - name: Push Docker image
           run: docker push $IMAGE_NAME
