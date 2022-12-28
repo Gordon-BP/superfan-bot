@@ -8,9 +8,8 @@ from transformers import GPT2TokenizerFast
 def get_embedding(text: str) -> list[float]:
     openai.api_key = os.environ["OPENAI_TOKEN"] 
     result = openai.Embedding.create(
-      model="text-embedding-ada-002",
-      input=text
-    )
+        model="text-embedding-ada-002",
+        input=text)
     return result["data"][0]["embedding"]
 
 def vector_similarity(x: list[float], y: list[float]) -> float:

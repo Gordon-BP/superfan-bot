@@ -1,6 +1,5 @@
-# Super secret API tokens
-apiKeys.py
 data/*
+Pipfile.lock
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

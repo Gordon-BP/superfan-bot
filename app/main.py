@@ -3,10 +3,17 @@ from pydantic import BaseModel
 from .app import get_embedding
 from dotenv import load_dotenv
 import os
+import logging
 from .createData import createDataset, connect_unix_socket
 app = FastAPI()
 load_dotenv() # For local dev only
 api_token = os.environ['API_TOKEN']
+
+@app.on_event("startup")
+async def startup_event():
+    log = logging.getLogger("uvicorn.info")
+    handler = logging.StreamHandler()
+    log.addHandler(handler)
 
 @app.get("/")
 def root(authToken:str):
@@ -29,6 +36,6 @@ def getRawArticle(id:int):
     return results.all()
 
 @app.post("/api/v1/createData")
-def createData(url:str, tableName:str):
-    createDataset(url, tableName)
-    return "Finished creating the articles table- check the database"
+def createData(url:str, tableName:str, overrideTables:bool=False):
+    returnMsg = createDataset(url, tableName, overrideTables)
+    return returnMsg
