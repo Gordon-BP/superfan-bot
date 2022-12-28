@@ -1,5 +1,6 @@
 # superfan-bot
 Turn your favorite fandom wiki into a conversational AI!
+Though it doesn't _have_ to be a fandom wiki, it could be any XML file. Or HTML. Or Markdown. Just gotta write a parsing program for those....
 
 This project is built on top of Google Cloud and will require a GCP account with billing set up to use.
 
