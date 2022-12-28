@@ -33,4 +33,4 @@ COPY ./models /superfan-bot/models
 #
 COPY ./data /superfan-bot/data
 #
-CMD ["pipenv", "shell", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["pipenv", "shell", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
