@@ -33,8 +33,9 @@ def prompt_GPT(prompt:str, top_articles: pd.DataFrame, articles_df:pd.DataFrame)
      df(pd.DataFrame): The dataframe with the actual content in it, **not** the embeddings 
     """
 
-    MAX_SECTION_LEN = 2048
+    MAX_SECTION_LEN = 1024
     #TODO What's the actual max token count for GPT3 completion?
+    #TODO make this configurable in the settings
     SEPARATOR = "\n "
 
     tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
@@ -56,10 +57,13 @@ def prompt_GPT(prompt:str, top_articles: pd.DataFrame, articles_df:pd.DataFrame)
     print(f"Selected {len(chosen_sections)} document sections:")
     print("\n".join(chosen_sections))
     
-    header = """Answer the question as truthfully as possible using the provided context, and if the answer is not contained within the text below, say "I don't know."\n\nContext:\n"""
+    header = """
+    Use the included context to answer the question as truthfully as possible.\n\nContext:\n
+    """
+    #TODO: Prompt screen should also be configurable
     prompt = header + "".join(chosen_sections) + "\n\n Q: " + prompt + "\n A:"
     print("Prompting with... \n" + prompt)
-
+    #TODO: Add model features like max tokens & temp as parameters in the yaml or docker files
     response = openai.Completion.create(
                 prompt=prompt,
                 model='text-ada-001',
@@ -67,5 +71,4 @@ def prompt_GPT(prompt:str, top_articles: pd.DataFrame, articles_df:pd.DataFrame)
                 temperature=0.7,
                 n=1
             )
-
     return response["choices"][0]["text"].strip(" \n")
