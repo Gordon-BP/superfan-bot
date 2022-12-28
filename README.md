@@ -1,12 +1,13 @@
 # superfan-bot
-Turn your fandom's wiki into an expert chatbot for your Discord server!
+Turn your favorite fandom wiki into a conversational AI!
 
 This project is built on top of Google Cloud and will require a GCP account with billing set up to use.
 
-## It's still a work in progress!
-...but here's a short list of what it does so far:
-1. Pulls a wiki's data, cleans it, and pops it into a database table
-2. Cool Docker and cloudbuilder files for proper CI/CD and secret management
+## This project built to be production-ready!
+Jupyter Notebooks are for kindergardeners, this project is built for the real-world with production-ready features like:
+1. Built on Google Cloud Project, so it can scale with the power of the Goog
+2. Lives in a Docker container for easy deployment and CI/CD
+3. Postgres database runs on Google Cloud SQL for even more scaling and accessibility
 
 ## What's left?
 * Write a cool parallel, async process for fetching the embeddings before the user dies or old age
