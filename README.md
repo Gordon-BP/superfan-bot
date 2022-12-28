@@ -1,29 +1,33 @@
 # superfan-bot
-A conversational AI that reads a fandom's wiki and becomes an expert for your Discord server!
+Turn your fandom's wiki into an expert chatbot for your Discord server!
 
-Big shoutouts to OpenAI, Kern AI, and stack overflow for their amazing sample code:
-* [Question Answering using Embeddings](https://github.com/openai/openai-cookbook/blob/main/examples/Question_answering_using_embeddings.ipynb)
-* [Collect Wikipedia data about Olympic Games 2020](https://github.com/openai/openai-cookbook/blob/838f000935d9df03e75e181cbcea2e306850794b/examples/fine-tuned_qa/olympics-1-collect-data.ipynb)
-* [Fine-tuning embeddings for better similarity search](https://github.com/code-kern-ai/refinery-sample-projects/tree/finetuning-similarity-search)
+This project is built on top of Google Cloud and will require a GCP account with billing set up to use.
 
-
-## Here's what actually works:
-1. A cool `post` endpoint that can get answers to questions about the Civilisation video game franchise!
-2. A script for parsing an XML data export from a fandom wiki (and cleaning it up a little bit)
-    > This script can also query OpenAI's new embeddings endpoint to get embeddings for the article sections! So far I've never spend more than 0.10 USD embedding the data
+## It's still a work in progress!
+...but here's a short list of what it does so far:
+1. Pulls a wiki's data, cleans it, and pops it into a database table
+2. Cool Docker and cloudbuilder files for proper CI/CD and secret management
 
 ## What's left?
-* Add a column to the articles database with the article URL so we can link to it in the answer.
-* Mount the embeddings and articles dataframes in some kind of database that doesn't have to reload every time I restart the app
-* Dockerize the app and the database so they can run on a server that's 1000X more powerful than my poor macbook air
-* Set up a discord bot that regurgitates GPT's answer along with some fancy formatting in a discord server.
+* Write a cool parallel, async process for fetching the embeddings before the user dies or old age
+* Set up a discord bot that regurgitates GPT's answer along with some fancy formatting.
 * Optimize the cleanin regex patterns to get rid of all the moustache placeholders and other formatting BS
 
 ## How to get it all set up:
+Bless your heart for showing interest ❤️ We're still pre-release so this is gonna be rough...
+1. Set up your GCP project with:
+    * Cloud Run
+    * Cloud Build
+    * Cloud SQL
+    * Secrets Manager
+2. In Cloud SQL, start yourself a pretty little postgres DB and make a db user. Put the password in the secrets manager and everything else as raw text in cloudbuilder.yaml
+3. In Cloud Build, set up a new job that builds from this repo and run it.
+4. Once the thing is built, visit the service URL from Cloud Run and add "/docs" to go to the FastAPI docs screen.
+5. Now you can create your articles database! Post a fandom wiki's data dump URL (usually an amazon s3 instance gotten from the wiki's special:statistics page) and watch the program turn that wiki into a database table!
+6. That's all I got for now. Cool stuff to come in the future though!!!
 
-1. Download the wiki XML. The program is set for fandom wiki exports from whatever-place.fandom.com/special:statistics. They come as a 7zip file and you will need to unpack it on your own.
-2. Run the 'createData.py' script on your data. I think I made an endpoint for it in the FastAPI?
-3. Use the embeddings endpoint to generate embeddings for your article database. This takes 30 - 60 min depending on the dataset size.
-4. Mount your embeddings and articles databases somewhere fast and accessible (I haven't done this yet and its killing meeeee)
-5. Start FastAPI and go to the endpoint
-6. `post` your question and wait for the results!
+## Aknowledgements & Shout-Outs
+* Borgeuad et al over at https://arxiv.org/abs/2112.04426 whose RETRO architecture is the basis for this whole damn project.
+* OpenAI's cookbook recipe [Question Answering using Embeddings](https://github.com/openai/openai-cookbook/blob/main/examples/Question_answering_using_embeddings.ipynb) whose code I shamelessly stole many times over along with their
+* [Collect Wikipedia data about Olympic Games 2020](https://github.com/openai/openai-cookbook/blob/838f000935d9df03e75e181cbcea2e306850794b/examples/fine-tuned_qa/olympics-1-collect-data.ipynb) cookbook recipe as well.
+* Kern.ai's blog post [Fine-tuning embeddings for better similarity search](https://dev.to/meetkern/how-to-fine-tune-your-embeddings-for-better-similarity-search-445e) presents a nice walkthrough for fine-tuning embeddings.
