@@ -397,15 +397,15 @@ def build_embeddings_table(df:pd.DataFrame, dbPrefix:str, pool:sqlalchemy.engine
     log.info(f"Successfully inserted data into table {dbPrefix}_embeddings")
     return embeddings_df
 
-def createDataset(url:str, dbPrefix:str, overrideTables:bool=False) -> dict:
+def create_or_load_dataset(url:str, dbPrefix:str, overrideTables:bool=False) -> dict[pd.DataFrame]:
     """
     This is supposed to be the main function that:
     1. Fetches the XML data from the provided URL ✅
     2. Parses the data, cleans it, breaks it into chunks, and measures the size ✅
     3. Uploads the data to a table in a Cloud SQL Postgres database ✅
-    4. Calls the OpenAI Embeddings endpoint to get embeddings for each chunk 🟨
-    5. Saves the embeddings to a table in a Cloud SQL Postgrest database 🟨
-    6. Returns a JSON object detailing the table names and sizes 🟨
+    4. Calls the OpenAI Embeddings endpoint to get embeddings for each chunk ✅
+    5. Saves the embeddings to a table in a Cloud SQL Postgrest database ✅
+    6. Returns a dictionary with the two tables loaded in it ✅
         TODO: Make it an async process and have some way of monitoring progress
     
     Parameters:
@@ -414,11 +414,9 @@ def createDataset(url:str, dbPrefix:str, overrideTables:bool=False) -> dict:
         overrideTables(bool): If the tables already exist, setting this to True will have the system ovrride it. False by default
     
     Returns
-        dict: a JSON object detailing the completed table names and size.
+        dict: a named dictionary with the named articles and embeddings dataframes
     """
-    dbPrefix = str.lower(dbPrefix) # because postgres will die if it sees a capital letter...
     pool = connect_unix_socket()
-    session = Session(pool)
     meta = sqlalchemy.MetaData(bind=pool)
     articles_table = sqlalchemy.Table(f"{dbPrefix}_articles", meta)
     embeddings_table = sqlalchemy.Table(f"{dbPrefix}_embeddings", meta)
@@ -432,19 +430,22 @@ def createDataset(url:str, dbPrefix:str, overrideTables:bool=False) -> dict:
        # dumbPool = connect_unix_socket(future=False)
        # articles_df = pd.read_sql_query(f"SELECT * FROM {dbPrefix}_articles", dumbPool)
         log.info(f"Creating new embeddings table or overriding existing one...")
-        embeddings_df = build_embeddings_table(articles_df[19200: k], dbPrefix, pool)
-    # Build a nice little JSON object to return
-        articleStatus = articles_table.exists()
-       # articleRowCount = dumbPool.execute(sqlalchemy.text(f"SELECT count('title') as exact_rows FROM {dbPrefix}_articles"))
-        embeddingStatus = embeddings_table.exists()
-       # embeddingRowCount = dumbPool.execute(sqlalchemy.text(f"SELECT count('title') as exact_rows FROM {dbPrefix}_embeddings"))
+        embeddings_df = build_embeddings_table(articles_df, dbPrefix, pool)
+        # Build a nice little JSON object to return
+    else:
+        log.info("Tables already exist, loading them into memory....")
+        with pool.connect() as conn:
+            articles_df = pd.read_sql_table(f"{dbPrefix}_articles", conn)
+            embeddings_df = pd.read_sql_table(f"{dbPrefix}_embeddings", conn)
+            embeddings_df['vec'] = embeddings_df.vec.apply(lambda x: [float(i) for i in x[1:-1].split(",")])
+
     return {
             f"{dbPrefix}_articles":{
-                "status":articleStatus
-             #   "rowCount": articleRowCount
+                "tableStatus":articles_table.exists(),
+                "dataFrame": articles_df
         },
             f"{dbPrefix}_embeddings":{
-                "status":embeddingStatus
-              #  "rowCount":embeddingRowCount
+                "tableStatus":embeddings_table.exists(),
+                "dataFrame":embeddings_df
             }
         }
