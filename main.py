@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from app.app import get_embedding, vector_similarity, prompt_GPT
+from src.app import get_embedding, vector_similarity, prompt_GPT
 from dotenv import load_dotenv
 import os
 import pathlib
@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import pickle
 import logging
-from app.createData import create_or_load_dataset, connect_unix_socket
+from src.createData import create_or_load_dataset, connect_unix_socket
 app = FastAPI()
 load_dotenv() # For local dev only
 global log

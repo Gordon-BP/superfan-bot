@@ -6,31 +6,18 @@ ENV LANG C.UTF-8
 ENV LC_ALL C.UTF-8
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONFAULTHANDLER 1
-#
-FROM base AS python-deps
-
-# Install pipenv and compilation dependencies
-RUN pip install pipenv
-RUN apt-get update && apt-get install -y --no-install-recommends gcc
-#
-COPY Pipfile .
-COPY Pipfile.lock .
-RUN PIPENV_VENV_IN_PROJECT=1 pipenv install --deploy
-#
-FROM base AS runtime
-# Copy virtual env from python-deps stage
-COPY --from=python-deps /.venv /.venv
-ENV PATH="/.venv/bin:$PATH"
-
+# Install & use pipenv
+COPY Pipfile Pipfile.lock ./
+RUN python -m pip install --upgrade pip
+RUN pip install pipenv && pipenv install --dev --system --deploy
 # Create and switch to a new user
 RUN useradd --create-home appuser
 WORKDIR /home/appuser
 USER appuser
 # Copy app files and the actual application
-COPY ./app /superfan-bot/app
-# 
-COPY ./models /superfan-bot/models
+COPY main.py ./
+COPY ./src ./src 
+COPY ./models ./models
+COPY ./data ./data
 #
-COPY ./data /superfan-bot/data
-#
-CMD ["pipenv", "shell", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["pipenv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]

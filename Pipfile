@@ -26,6 +26,7 @@ lxml = "*"
 update = "*"
 pipenv = "*"
 jupyter = "*"
+typing-extensions = "*"
 
 [dev-packages]
 ipykernel = "*"
