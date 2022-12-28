@@ -33,5 +33,4 @@ COPY ./models /superfan-bot/models
 #
 COPY ./data /superfan-bot/data
 #
-ENTRYPOINT ["python", "-m", "http.server"]
 CMD ["pipenv", "shell", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
