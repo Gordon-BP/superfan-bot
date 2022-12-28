@@ -1,21 +1,29 @@
 import pandas as pd
 import re
 import os
+import numpy as np
 from io import StringIO
 import sqlalchemy
+from sqlalchemy.orm import Session
+from sqlalchemy.dialects import postgresql
 from dotenv import load_dotenv
 import mwparserfromhell
 from pyunpack import Archive
 from bs4 import BeautifulSoup, ResultSet
 import requests
+import logging
 from pathlib import Path
 from google.cloud.sql.connector import Connector, IPTypes
 import pg8000
+import concurrent.futures
+import asyncio
 import logging as log
 from transformers import GPT2TokenizerFast
 from .app import get_embedding
-logging_client = logging.Client()
-logging_client.setup_logging()
+log = logging.getLogger("uvicorn.info")
+#handler = logging.StreamHandler()
+os.environ['TOKENIZERS_PARALLELISM'] = 'true'
+#log.addHandler(handler)
 
 def getWikiAsSoup(url:str, filepath:Path)-> BeautifulSoup:
   log.info(f"Fetching file from {url}...")
@@ -173,7 +181,7 @@ def fast_chonk(row:pd.Series, tokenizer:GPT2TokenizerFast) -> list[dict]:
 
     return chunks
 
-def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
+def connect_unix_socket(future:bool = True) -> sqlalchemy.engine.base.Engine:
     """
     Connects to a Google Cloud Postgresql database. 
     Make sure that the env variables are properly defined in your cloudbuilder.yaml file.
@@ -210,17 +218,15 @@ def connect_unix_socket() -> sqlalchemy.engine.base.Engine:
         pool_size=50,
         max_overflow=10,
         pool_timeout=30,  # 30 seconds
-        future=True,
+        future=future,
         pool_recycle=1800,  # 30 minutes
         )
     return pool
 
-def compute_doc_embeddings(df: pd.DataFrame) -> dict[tuple[str, str], list[float]]:
+def compute_doc_embeddings(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create an embedding for each row in the dataframe using the OpenAI Embeddings API.
     Return a dictionary that maps between each embedding vector and the index of the row that it corresponds to.
-    TODO: make this async or something? Maybe the async comes in how we call this function...
-
     Parameters:
         df(pd.DataFrame): The data to embed. Should look like:
             | id | title | heading | text | tokens |
@@ -229,7 +235,7 @@ def compute_doc_embeddings(df: pd.DataFrame) -> dict[tuple[str, str], list[float
         dict: [(tite, heading), 1526 numbers]
     """
     return {
-        idx: get_embedding(r.text.replace("\n", " ")) for idx, r in df.iterrows()
+        (r.title, r.heading): get_embedding(r.text.replace("\n", " ")) for _, r in df.iterrows()
     }
 
 def compute_cost_estimate(df: pd.DataFrame) -> float:
@@ -244,15 +250,162 @@ def compute_cost_estimate(df: pd.DataFrame) -> float:
     """
     return (df.tokens.sum()/1000)*0.0004
 
-def createDataset(url:str, dbPrefix:str, overrideTables:bool=False) -> dict:
+def build_articles_table(url:str, pool:sqlalchemy.engine.Engine, dbPrefix:str, 
+                        maxTokens:int = 400, minTokens:int = 20)-> pd.DataFrame:
+    """
+    Builds the articles table in the postgres db with data fetched from the provided URL. The table will look liek this:
+    | id | title | heading | text | tokens |
+    |----|-------|---------|------|--------|
+
+    Parameters:
+        url(str): The URL that hosts the wiki content
+        pool(sqlalchemy.engine.Engine): The sqlalchemy engine that can connect to the database
+        dbPrefix(str): The prefix for the new articles table
+        maxTokens(int): The maximum length for a chunk of content. Default is 400.
+        minTokens(int): The mininmum length for a chunk of content. Default is 20.
+    
+    Returns:
+        pd.DataFrame that looks like the markdown table above
+    """
+    returnDict = {}
+    soup = getWikiAsSoup(url, Path('./data/wiki.xml.7z')) #Fetch the data
+    df = cleanData(soup.find_all('page')) #Clean the data
+    df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
+    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    df['tokens'] = df.text.apply(lambda x:int(len(tokenizer.encode(x)))) #Get token count to find articles with long subsections
+    df_short = df.loc[(df.tokens <= maxTokens) & (df.tokens >= minTokens)]
+    chunks = []
+    for _, row in df.loc[df.tokens >= maxTokens].iterrows():
+        chunks = chunks + fast_chonk(row, tokenizer)
+    df_chunks = pd.DataFrame.from_records(chunks)
+    df = pd.concat([df_short, df_chunks])
+    df.drop("index", axis=1, inplace=True)
+    df.reset_index(drop=True)  
+    log.info(f"Articles data created with shape {df.shape}. Now inserting into database....")
+
+    with pool.connect() as conn:
+        log.debug("Creating articles table...")
+        df.head(0).to_sql(  #drops old table and creates new empty table
+            f'{dbPrefix}_articles', conn, 
+            if_exists='replace',
+            index=False,
+            dtype={
+                'id':sqlalchemy.types.INTEGER(),#TODO: is integer the best type here? Or would numeric be better? Does it matter?...
+                'title':sqlalchemy.types.TEXT(),
+                'heading':sqlalchemy.types.TEXT(),
+                'text':sqlalchemy.types.TEXT(),
+                'tokens':sqlalchemy.types.INTEGER()
+            }) 
+        conn.commit()
+    # pg8000 doesn't let sqlalchemy do COPY in a pretty way so we gotta do it like this
+    log.debug("Copying articles into articles table...")
+    rawConn = pool.raw_connection()
+    rawCur = rawConn.cursor()
+    output = StringIO()
+    df.to_csv(output, sep=',', header=False, index=False, encoding='UTF-8')
+    output.seek(0)
+    rawCur.execute(f"""
+        COPY {dbPrefix}_articles 
+        FROM stdin 
+        WITH(format csv, DELIMITER ',')""", 
+        stream = output)
+    rawConn.commit()
+    rawConn.close()
+
+    log.info(f"Successfully inserted data into table {dbPrefix}_articles")
+
+    os.remove("./data/wiki.xml")
+    os.remove("./data/wiki.xml.7z")
+    #TODO: Is there a way to clear the memory so we're not keeping the giant articles df around?
+    log.info(f"Table {dbPrefix}_articles has been created with {df.shape[0]} rows and {df.shape[1]} columns")
+    return df
+
+def make_list(title:str, heading:str,text:str)->list:
+    return[title, heading] + [get_embedding(text)]
+
+def get_bulk_embeddings(data:pd.DataFrame) -> pd.DataFrame:
+    """
+    Async method for getting bulk embeddings
+
+    Parameters:
+        data(pd.DataFrame): The dataframe whose data gets embedded
+
+    Returns:
+        pd.DataFrame: A nice new dataframe with the embeddings info included 
+    """
+    dataArr = []
+    log.debug("Starting embeddings chunk...")
+
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        for _, row in data.iterrows():
+            futures = [executor.submit(make_list, row.title, row.heading, row.text)]
+        for future in concurrent.futures.as_completed(futures):
+            dataArr.append(future.result())
+    log.debug("Embeddings chunk completed!")
+    return pd.DataFrame.from_records(dataArr, columns=['title', 'heading', 'vec'])
+
+def build_embeddings_table(df:pd.DataFrame, dbPrefix:str, pool:sqlalchemy.engine.Engine)-> pd.DataFrame:
+    """
+    Uses OpenAI's embeddings endpoint to embed content and loads it into a new database table.
+
+    Parameters:
+        df(pd.DataFrame): The dataframe containing the articles information
+        dbPrefix(str): Prefix for this table name
+        pool(sqlalchemy.engine.Engine): An sqlalchemy engine to connect to the database with
+
+    Returns:
+        pd.DataFrame: The completed embeddings
+    """
+    chunk_size = int(np.floor(df.shape[0] / 100)) #100 chunks
+    log.info(f"Found {df.shape[0]} rows \nEstimate embeddings cost: {df.tokens.sum()/1000*0.0004}")
+    chunks = [df.iloc[i: i+chunk_size] for i in range(0,df.shape[0], chunk_size)]
+    with pool.connect() as conn:
+        log.debug("Creating table...")
+        conn.execute(sqlalchemy.text(
+            f"""CREATE TABLE IF NOT EXISTS {dbPrefix}_embeddings 
+            (title text, heading text, vec text)""")) 
+        conn.commit()
+   #So while I would love to add some parallel processing here, for some reason it starts to use up
+   # my openAI credits in a MASSIVE way
+   # until I figure that out, y'all get this slow boi
+    for chunk in chunks:
+        print("Chunk!")
+        embeddingsArr = []
+        for idx, row in chunk.iterrows():
+            print(f"Embedding row {idx} of {chunk.shape[0]}")
+            embeddingsArr.append({"title":row.title, "heading":row.heading, "vec":get_embedding(row.text) })
+        
+        embeddings_df = pd.DataFrame.from_records(embeddingsArr)
+        print("We got the data!")
+        print(embeddings_df.head())
+        # pg8000 doesn't let sqlalchemy do COPY in a pretty way so we gotta do it like this
+        log.info("Copying embeddings into embeddings table...")
+        rawConn = pool.raw_connection()
+        rawCur = rawConn.cursor()
+        output = StringIO()
+        embeddings_df.to_csv(output, sep=',', header=False, index=False, encoding='UTF-8')
+        output.seek(0)
+        rawCur.execute(f"""
+            COPY {dbPrefix}_embeddings 
+            FROM stdin 
+            WITH(format csv, DELIMITER ',')""", 
+            stream = output)
+        rawConn.commit()
+        rawConn.close()
+        log.info(f"Uploaded chunk!")
+
+    log.info(f"Successfully inserted data into table {dbPrefix}_embeddings")
+    return embeddings_df
+
+def create_or_load_dataset(url:str, dbPrefix:str, overrideTables:bool=False) -> dict[pd.DataFrame]:
     """
     This is supposed to be the main function that:
     1. Fetches the XML data from the provided URL ✅
     2. Parses the data, cleans it, breaks it into chunks, and measures the size ✅
     3. Uploads the data to a table in a Cloud SQL Postgres database ✅
-    4. Calls the OpenAI Embeddings endpoint to get embeddings for each chunk 🟨
-    5. Saves the embeddings to a table in a Cloud SQL Postgrest database 🟨
-    6. Returns a JSON object detailing the table names and sizes 🟨
+    4. Calls the OpenAI Embeddings endpoint to get embeddings for each chunk ✅
+    5. Saves the embeddings to a table in a Cloud SQL Postgrest database ✅
+    6. Returns a dictionary with the two tables loaded in it ✅
         TODO: Make it an async process and have some way of monitoring progress
     
     Parameters:
@@ -261,98 +414,38 @@ def createDataset(url:str, dbPrefix:str, overrideTables:bool=False) -> dict:
         overrideTables(bool): If the tables already exist, setting this to True will have the system ovrride it. False by default
     
     Returns
-        dict: a JSON object detailing the completed table names and size.
+        dict: a named dictionary with the named articles and embeddings dataframes
     """
-    dbPrefix = str.lower(dbPrefix) # because postgres will die if it sees a capital letter...
-    returnDict = {}
     pool = connect_unix_socket()
-    insp = sqlalchemy.inspect(pool)
-    meta = sqlalchemy.MetaData()
+    meta = sqlalchemy.MetaData(bind=pool)
     articles_table = sqlalchemy.Table(f"{dbPrefix}_articles", meta)
     embeddings_table = sqlalchemy.Table(f"{dbPrefix}_embeddings", meta)
-    log.info(f"Status for table {articles_table} is {insp.has_table(articles_table, None)}")
-    log.info(f"Status for table {embeddings_table} is {insp.has_table(embeddings_table, None)}")
-    
-    if(not(insp.has_table(articles_table, None)) or overrideTables):
-        log.info(f"Creating new tables or overriding existing ones...")
-        soup = getWikiAsSoup(url, Path('./data/wiki.xml.7z')) #Fetch the data
-        df = cleanData(soup.find_all('page')) #Clean the data
-        df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
-        tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-        df['tokens'] = df.text.apply(lambda x:int(len(tokenizer.encode(x)))) #Get token count to find articles with long subsections
-        #TODO make these numbers parameters? Maybe?
-        df_short = df.loc[(df.tokens <= 400) & (df.tokens >= 20)]
-        df_long = df.loc[df.tokens >= 400]
-        chunks = []
-        for _, row in df_long.iterrows():
-            chunks = chunks + fast_chonk(row, tokenizer)
-        df_chunks = pd.DataFrame.from_records(chunks)
-        df = pd.concat([df_short, df_chunks])
-        df.drop("index", axis=1, inplace=True)
-        df.reset_index(drop=True)  
-        log.info(f"Articles data created with shape {df.shape}. Now inserting into database....")
-
+    log.info(f"Status for articles table {articles_table.name} is {articles_table.exists()}")
+    log.info(f"Status for embeddings table {embeddings_table.name} is {embeddings_table.exists()}")
+    log.info(f"Override tables is {overrideTables}")
+    if(not(articles_table.exists()) or overrideTables):
+        log.info(f"Creating new articles table or overriding existing one...")
+        articles_df = build_articles_table(url, pool, dbPrefix)
+       # log.info("Using existing articles table...")
+       # dumbPool = connect_unix_socket(future=False)
+       # articles_df = pd.read_sql_query(f"SELECT * FROM {dbPrefix}_articles", dumbPool)
+        log.info(f"Creating new embeddings table or overriding existing one...")
+        embeddings_df = build_embeddings_table(articles_df, dbPrefix, pool)
+        # Build a nice little JSON object to return
+    else:
+        log.info("Tables already exist, loading them into memory....")
         with pool.connect() as conn:
-            log.debug("Creating articles table...")
-            df.head(0).to_sql(  #drops old table and creates new empty table
-                f'{dbPrefix}_articles', conn, 
-                if_exists='replace',
-                index=False,
-                dtype={
-                    'id':sqlalchemy.types.INTEGER(),#TODO: is integer the best type here? Or would numeric be better? Does it matter?...
-                    'title':sqlalchemy.types.TEXT(),
-                    'heading':sqlalchemy.types.TEXT(),
-                    'text':sqlalchemy.types.TEXT(),
-                    'tokens':sqlalchemy.types.INTEGER()
-                }) 
-            conn.commit()
-        # pg8000 doesn't let sqlalchemy do COPY in a pretty way so we gotta do it like this
-        log.debug("Copying articles into articles table...")
-        rawConn = pool.raw_connection()
-        rawCur = rawConn.cursor()
-        output = StringIO()
-        df.to_csv(output, sep=',', header=False, index=False, encoding='UTF-8')
-        output.seek(0)
-        rawCur.execute(f"""
-            COPY {dbPrefix}_articles 
-            FROM stdin 
-            WITH(format csv, DELIMITER ',')""", 
-            stream = output)
-        rawConn.commit()
-        rawConn.close()
-  
-        log.info(f"Successfully inserted data into table {dbPrefix}_articles")
+            articles_df = pd.read_sql_table(f"{dbPrefix}_articles", conn)
+            embeddings_df = pd.read_sql_table(f"{dbPrefix}_embeddings", conn)
+            embeddings_df['vec'] = embeddings_df.vec.apply(lambda x: [float(i) for i in x[1:-1].split(",")])
 
-        os.remove("./data/wiki.xml")
-        os.remove("./data/wiki.xml.7z")
-        #TODO: Is there a way to clear the memory so we're not keeping the giant articles df around?
-        returnDict[0] = {
-            "tableName":f"{dbPrefix}_articles",
-            "rowCount":df.shape[0],
-            "colCount":df.shape[1]
+    return {
+            f"{dbPrefix}_articles":{
+                "tableStatus":articles_table.exists(),
+                "dataFrame": articles_df
+        },
+            f"{dbPrefix}_embeddings":{
+                "tableStatus":embeddings_table.exists(),
+                "dataFrame":embeddings_df
+            }
         }
-    return returnDict
-    # And here's the code that will fetch the embeddings!
-    # it's also horribly wrong and slow and just a goddamn mess
-    # I will fix it tomorrow!
-"""  if(~insp.has_table(embeddings_table, None)):
-    # Time to make the embeddings babyyyy~~~
-        try:
-            cost = compute_cost_estimate(df)
-            print(f"Fetching embeddings for this document is estimated to cost USD: {cost}")
-            #TODO: Maybe put a way to stop this if the cost is too high?...
-            #TODO: Make a joke mode where we add $100 to the cost 
-            embeddings = compute_doc_embeddings(df)
-            embeddings_dict = []
-            for idx, row in df.iterrows():
-                mylist = [row.title, row.header] + embeddings[idx]
-                embeddings_dict.append(mylist)
-            with pool.connect() as db_conn:
-                edf = pd.DataFrame.from_records(embeddings_dict)
-                edf.to_sql(f"{dbPrefix}_embeddings")
-                print(f"Successfully created table {dbPrefix}_embeddings")
-        except:
-            print("Something went wrong creating the embeddings table. Check the logs")
-            return "Something went wrong with the embeddings table. Check the logs"
-  """  
-    
