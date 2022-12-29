@@ -8,8 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONFAULTHANDLER 1
 # Install & use pipenv
 COPY Pipfile Pipfile.lock ./
-RUN python -m pip install --upgrade pip
-RUN pip install pipenv && pipenv install --dev --system --deploy
+#zipp y r u like this?
+RUN python -m pip install --upgrade pip && pip install --quiet zipp==3.10.0
+RUN pip install pipenv && pipenv install --dev --system --deploy && pipenv lock --clear
 # Create and switch to a new user
 RUN useradd --create-home appuser
 WORKDIR /home/appuser

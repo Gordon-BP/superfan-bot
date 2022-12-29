@@ -17,6 +17,7 @@ embeddings_df = pd.DataFrame()
 
 @app.on_event("startup")
 async def startup_event():
+    global log
     log = logging.getLogger("uvicorn.info")
    # handler = logging.StreamHandler()
    # log.addHandler(handler)
@@ -24,28 +25,30 @@ async def startup_event():
 @app.post("/api/v1/createData")
 def create_or_load_data(tableName:str, url:str = '', overrideTables:bool=False):
     tableName = str.lower(tableName)
-    if(pathlib.Path(f"./data/{tableName}_articles.gz").is_file()):
-        print("Tables exist in memory already")
-        global embeddings_df
-        global articles_df
-        embeddings_df = pd.read_pickle(
-            f"data/{tableName}_embeddings.gz", 
-            compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
-        articles_df = pd.read_pickle(
-            f"data/{tableName}_articles.gz", 
-            compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
-        return f"Loaded tables"
+    global embeddings_df
+    global articles_df
+   #TODO: is this the best way to do caching?
+   # if(pathlib.Path(f"./data/{tableName}_articles.gz").is_file()):
+   #     print("Tables exist in memory already")
+   #     embeddings_df = pd.read_pickle(
+   #         f"data/{tableName}_embeddings.gz", 
+   #         compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
+   #     articles_df = pd.read_pickle(
+   #         f"data/{tableName}_articles.gz", 
+   #         compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
+   #     return f"Loaded tables"
     tables = create_or_load_dataset(url, tableName, overrideTables)
     articles_df = tables[f"{tableName}_articles"]['dataFrame']
     embeddings_df = tables[f"{tableName}_embeddings"]['dataFrame']
-    tables[f"{tableName}_articles"]['dataFrame'].to_pickle(
-        path=f"data/{tableName}_articles.gz",
-        compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1}, 
-        protocol=-1)
-    tables[f"{tableName}_embeddings"]['dataFrame'].to_pickle(
-        path=f"data/{tableName}_embeddings.gz",
-        compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1}, 
-        protocol=-1)
+   #TODO: is this the best way to cache?
+   # tables[f"{tableName}_articles"]['dataFrame'].to_pickle(
+   #     path=f"data/{tableName}_articles.gz",
+   #     compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1}, 
+   #     protocol=-1)
+   # tables[f"{tableName}_embeddings"]['dataFrame'].to_pickle(
+   #     path=f"data/{tableName}_embeddings.gz",
+   #     compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1}, 
+   #     protocol=-1)
     return f"Loaded tables"
 
 @app.get("/")
@@ -67,19 +70,23 @@ def get_Similar_Articles(tableName:str, query:str, n:int = 5) -> pd.DataFrame:
     queryEmbedding = get_embedding(query)
     global embeddings_df
     global articles_df
+    global log
     if((embeddings_df.empty) or (articles_df.empty)):
-        embeddings_df = pd.read_pickle(
-            f"./data/{tableName}_embeddings.gz", 
-            compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
-        articles_df = pd.read_pickle(
-            f"./data/{tableName}_articles.gz", 
-            compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
+        #TODO Validate that these dataframes contain the *right* data as well
+        #embeddings_df = pd.read_pickle(
+        #    f"./data/{tableName}_embeddings.gz", 
+        #    compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
+        #articles_df = pd.read_pickle(
+        #    f"./data/{tableName}_articles.gz", 
+        #    compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
+        log.error(f"Requested table {tableName} does not exist")
+        raise LookupError(f"Requested table {tableName} does not exist")
     results= []
     for _, row in embeddings_df.iterrows():
         title = row.title
         heading = row.heading
         sim = vector_similarity([queryEmbedding], row.vec)
-        #print(f"Title: {title}\nHeading: {heading}\nSimalarity: {sim}")
+        #print(f"Title: {title}\nHedockading: {heading}\nSimalarity: {sim}")
         results.append({"title":title, "heading":heading, "sim":sim})
     return pd.DataFrame.from_records(results).sort_values(by='sim', ascending=False).iloc[0:n]
 

@@ -4,8 +4,6 @@ import os
 import numpy as np
 from io import StringIO
 import sqlalchemy
-from sqlalchemy.orm import Session
-from sqlalchemy.dialects import postgresql
 from dotenv import load_dotenv
 import mwparserfromhell
 from pyunpack import Archive
@@ -16,7 +14,6 @@ from pathlib import Path
 from google.cloud.sql.connector import Connector, IPTypes
 import pg8000
 import concurrent.futures
-import asyncio
 import logging as log
 from transformers import GPT2TokenizerFast
 from .app import get_embedding
