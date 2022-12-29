@@ -3,4 +3,5 @@
 .github/
 __pycache__/
 .ipynb_checkpoints/
-data/
+data/credentials.json
+data/*.gz
