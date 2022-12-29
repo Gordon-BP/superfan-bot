@@ -47,6 +47,7 @@ def get_Similar_Articles(tableName:str, query:str, n:int = 5) -> pd.DataFrame:
     pool = connect_unix_socket()
     with pool.connect() as conn:
         embeddings_df = pd.read_sql_table(f"{tableName}_embeddings", conn)
+        embeddings_df['vec'] = embeddings_df.vec.apply(lambda x: [float(i) for i in x[1:-1].split(",")])
     results= []
     for _, row in embeddings_df.iterrows():
         title = row.title
