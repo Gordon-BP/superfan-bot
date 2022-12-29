@@ -12,8 +12,6 @@ from src.createData import create_or_load_dataset, connect_unix_socket
 app = FastAPI()
 load_dotenv() # For local dev only
 global log
-articles_df = pd.DataFrame()
-embeddings_df = pd.DataFrame()
 
 @app.on_event("startup")
 async def startup_event():
@@ -25,30 +23,7 @@ async def startup_event():
 @app.post("/api/v1/createData")
 def create_or_load_data(tableName:str, url:str = '', overrideTables:bool=False):
     tableName = str.lower(tableName)
-    global embeddings_df
-    global articles_df
-   #TODO: is this the best way to do caching?
-   # if(pathlib.Path(f"./data/{tableName}_articles.gz").is_file()):
-   #     print("Tables exist in memory already")
-   #     embeddings_df = pd.read_pickle(
-   #         f"data/{tableName}_embeddings.gz", 
-   #         compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
-   #     articles_df = pd.read_pickle(
-   #         f"data/{tableName}_articles.gz", 
-   #         compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
-   #     return f"Loaded tables"
-    tables = create_or_load_dataset(url, tableName, overrideTables)
-    articles_df = tables[f"{tableName}_articles"]['dataFrame']
-    embeddings_df = tables[f"{tableName}_embeddings"]['dataFrame']
-   #TODO: is this the best way to cache?
-   # tables[f"{tableName}_articles"]['dataFrame'].to_pickle(
-   #     path=f"data/{tableName}_articles.gz",
-   #     compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1}, 
-   #     protocol=-1)
-   # tables[f"{tableName}_embeddings"]['dataFrame'].to_pickle(
-   #     path=f"data/{tableName}_embeddings.gz",
-   #     compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1}, 
-   #     protocol=-1)
+    create_or_load_dataset(url, tableName, overrideTables)
     return f"Loaded tables"
 
 @app.get("/")
@@ -68,19 +43,10 @@ def get_Similar_Articles(tableName:str, query:str, n:int = 5) -> pd.DataFrame:
         dict: the top n most similar text blurbs
     """
     queryEmbedding = get_embedding(query)
-    global embeddings_df
-    global articles_df
-    global log
-    if((embeddings_df.empty) or (articles_df.empty)):
-        #TODO Validate that these dataframes contain the *right* data as well
-        #embeddings_df = pd.read_pickle(
-        #    f"./data/{tableName}_embeddings.gz", 
-        #    compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
-        #articles_df = pd.read_pickle(
-        #    f"./data/{tableName}_articles.gz", 
-        #    compression={'method': 'gzip', 'compresslevel': 1, 'mtime': 1})
-        log.error(f"Requested table {tableName} does not exist")
-        raise LookupError(f"Requested table {tableName} does not exist")
+    #TODO: make some kind of cache to speed this up?
+    pool = connect_unix_socket()
+    with pool.connect() as conn:
+        embeddings_df = pd.read_sql_table(f"{tableName}_embeddings", conn)
     results= []
     for _, row in embeddings_df.iterrows():
         title = row.title
@@ -92,6 +58,8 @@ def get_Similar_Articles(tableName:str, query:str, n:int = 5) -> pd.DataFrame:
 
 @app.post('/api/v1/{tableName}/query')
 def get_response(query:str, tableName:str):
-    global articles_df
+    pool = connect_unix_socket()
     top_articles = get_Similar_Articles(tableName, query)
+    with pool as conn:
+        articles_df = pd.read_sql_table(f"{tableName}_articles", conn)
     return prompt_GPT(query, top_articles, articles_df)
