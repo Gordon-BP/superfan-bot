@@ -1,6 +1,6 @@
 ## This is a placeholder
 
-This project is _totally_ a machine learning AI project and not a DevOPs learning activity done the hard way **copium**
+Maybe one day there will be an option for fine-tuning the embeddings so that we get better search results. We gotta walk before we run, though!
 
 
 WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW
