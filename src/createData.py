@@ -3,6 +3,7 @@ import re
 import os
 import numpy as np
 import cohere
+from app import get_embedding
 from dotenv import load_dotenv
 import mwparserfromhell
 from pyunpack import Archive
@@ -12,7 +13,7 @@ from pathlib import Path
 import pinecone
 import logging
 from transformers import GPT2TokenizerFast
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 load_dotenv()
 #log.addHandler(handler)
@@ -38,6 +39,7 @@ def getDataAsSoup(url:str, filepath:Path, filename:str='wiki.xml')-> BeautifulSo
         return soup
 
 def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
+    #TODO: Make this suck less
   """
     Main method to parse a wiki XML file and turn it into a nice pretty DataFrame like
     | id | Title | Heading | Text |
@@ -193,19 +195,59 @@ def compute_cost_estimate(df: pd.DataFrame) -> float:
     """
     return (df.tokens.sum()/1000)*0.0004
 
-def build_embeddings_table(df:pd.DataFrame, dbPrefix:str)-> pd.DataFrame:
+def init_pinecone_index(df:pd.DataFrame, indexLabel:str, embeds:list[float]) -> pinecone.Index:
     """
-    Uses Cohere's embeddings endpoint to embed content and loads it into a new database table.
+    Puts the final data into a pinecone database.
 
     Parameters:
-        df(pd.DataFrame): The dataframe containing the articles information
-        dbPrefix(str): Prefix for this table name
-        pool(sqlalchemy.engine.Engine): An sqlalchemy engine to connect to the database with
+        df(pd.DataFrame): a Dataframe containing the vector data and metadata to insert
+        indexLabel(str): what to call the new index
+        embeds(list[float]): a list of vector embeddings for each data row
 
-    Returns:
-        pd.DataFrame: The completed embeddings
+    Returns
+        pinecone.Index: index object of the new dataset
     """
-
+    load_dotenv()
+    #TODO: Add text to assert that df and embeds are the same length
+    rows = len(embeds[0])
+    pinecone.init(os.environ['PINECONE_API_KEY'], environment='us-west1-gcp')
+    # if the index does exist, we delete it
+    if indexLabel in pinecone.list_indexes():
+        #pinecone.delete_index(indexLabel)
+        pass
+    else:
+        pinecone.create_index(
+            indexLabel,
+            dimension=rows,
+            metric='dotproduct'
+        )
+    logging.info("Index created")
+    # connect to index
+    index = pinecone.Index(indexLabel)
+    batch_size = 32
+    logging.info("Index connected")
+    # Now we start to laod the embeddings....
+    ids = [str(id) for id in range(len(df['id']))]
+    logging.info(f"metadata dataset is:\n {df[['title', 'heading','text']].columns}")
+    # create list of metadata dictionaries
+    meta = [dict({'title':data['title'],'heading':data['heading'],'text':data['text']}) for _, data in df[['title', 'heading','text']].iterrows()]
+    logging.info(f"Sample of metadata:\n{meta[1]}")
+    # create list of (id, vector, metadata) tuples to be upserted
+    to_upsert = list(zip(ids, embeds, meta))
+    logging.info(f"Ready to upsert! Sample of upsert data:\n {to_upsert[0]}\nData size:{len(to_upsert)}")
+    logging.info("Upserting data...")
+    dataLen = len(to_upsert)
+    for i in range(0, dataLen, batch_size):
+        i_end = min(i+batch_size, dataLen)
+        logging.info(f"Starting upsert batch {i}, upsetting data from {i} to {i_end}...")
+        logging.info(f"Upsertting {len(to_upsert[i:i_end])} rows of data")
+        logging.info(f"to_upsert is of type {type(to_upsert)}\n")
+        index.upsert(vectors=to_upsert[i:i_end], namespace="")
+        print(index.describe_index_stats())
+    logging.info("Upsert completed")
+    # let's view the index statistics
+    print(index.describe_index_stats())
+    return index
 
 def create_index(dataSource:str, indexLabel:str, dimension:int = 1024, metric:str='cosine', 
     overrideIndex:bool = False, maxTokens:int = 512, minTokens:int = 10) -> pinecone.Index:
@@ -229,7 +271,7 @@ def create_index(dataSource:str, indexLabel:str, dimension:int = 1024, metric:st
     Returns
         pinecone.Index: an Index that can access the pinecone database
     """
-    if(not(overrideIndex)):
+    if(overrideIndex):
         logging.info(f"Creating new Index or overriding existing one...")
         # First we need to load and clean the data
         soup = getDataAsSoup(dataSource, Path('./data/wiki.xml.7z')) #Fetch the data
@@ -245,52 +287,35 @@ def create_index(dataSource:str, indexLabel:str, dimension:int = 1024, metric:st
         df = pd.concat([df_short, df_chunks])
         df.drop("index", axis=1, inplace=True)
         df.reset_index(drop=True)  
+        os.remove("./data/wiki.xml.7z")
+        os.remove("./data/wiki.xml")
         # limit to 100 rows for testing
         df = df.iloc[:100]
-        logging.info(f"Articles data created with shape {df.shape}")
-        #TODO: Delete the .xml and .7z files after loading them
-        logging.info('aaaaAAAAAAaaaAAAAAA\n\n\n\naaaaaAAAAAaaaaAAaAAAa')
-        # Now we embed it!
-        # setting it to only embed the first 10 for testing purposes
-        logging.info('Getting the Embeddings now....')
-        load_dotenv()
-        co = cohere.Client(os.environ['COHERE_API_KEY'])
-        logging.info("We have the key, now calling cohere...")
-        embed = co.embed(
-            texts=df['text'],
-            model='small',
-            truncate='LEFT'
-        ).embeddings
-        shape = np.array(embed).shape
-        logging.debug("Cohere part is done")
-        # Start getting Pinecone set up
-        logging.info("Making the Pinecone now....")
-        load_dotenv()
-        pinecone.init(os.environ['PINECONE_API_KEY'], environment='us-west1-gcp')
-        # if the index does not exist, we create it
-        if indexLabel not in pinecone.list_indexes():
-            pinecone.create_index(
-                indexLabel,
-                dimension=shape[1],
-                metric='dotproduct'
-            )
-        # connect to index
-        index = pinecone.Index(indexLabel)
-        batch_size = 128
-        # Now we start to laod the embeddings....
-        ids = df.loc['id'].to_list()
-        # create list of metadata dictionaries
-        meta = [[{'title': title} for title in df.loc['title']],
-        [{'heading': heading} for heading in df.loc['heading']],
-        [{'text': text} for text in df.loc['text']]]
-        # create list of (id, vector, metadata) tuples to be upserted
-        to_upsert = list(zip(ids, embed, meta))
-
-        for i in range(0, shape[0], batch_size):
-            i_end = min(i+batch_size, shape[0])
-            index.upsert(vectors=to_upsert[i:i_end])
-
-        # let's view the index statistics
-        print(index.describe_index_stats())
-
-    return index
+    else:
+        df = pd.read_csv("./data/Witcher_preview.csv")
+    logging.info(f"Articles data created with shape {df.shape}")
+    #TODO: Delete the .xml and .7z files after loading them
+    logging.info('aaaaAAAAAAaaaAAAAAA\n\n\n\naaaaaAAAAAaaaaAAaAAAa')
+    # Now we embed it!
+    # setting it to only embed the first 10 for testing purposes
+    logging.info('Getting the Embeddings now....')
+    load_dotenv()
+    co = cohere.Client(os.environ['COHERE_API_KEY'])
+    logging.info("We have the key, now calling cohere...")
+    # Batch embedding to comply with their free 100/minute rate limit
+    text_as_list = df['text'].to_list()
+    dataRows = len(text_as_list)
+    logging.info(f"Prepping to embed, data is {dataRows} long")
+    embed = []
+    for i in range(0, dataRows, 96):
+        i_end = min(i+100, dataRows)
+        logging.info(f"Starting embedding batch {i},embedding data from {i} to {i_end}...")
+        embeddings = get_embedding(text_as_list[i:i_end])
+        logging.info(f"We have embedded {len(embeddings)} rows")
+        [embed.append(_) for _ in embeddings]
+    rows = len(embed)
+    logging.info("Cohere part is done")
+    logging.info(f"Shape of the dataset {rows} rows")
+    # Start getting Pinecone set up
+    logging.info("Making the Pinecone now....")
+    return init_pinecone_index(df, indexLabel, embed)
