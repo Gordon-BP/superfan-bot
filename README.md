@@ -1,42 +1,22 @@
-# superfan-bot
+# superfan-bot-v2
 Turn your favorite fandom wiki into a conversational AI!
-Though it doesn't _have_ to be a fandom wiki, it could be any XML file. Or HTML. Or Markdown. Just gotta write a parsing program for those....
+Also thinking about changing the name to something catchier. Possibilities include "Wiki-speaks"
 
-This project is built on top of Google Cloud and will require a GCP account with billing set up to use.
+## Back for round two, this time 100% lower running costs
+When I was last developing this, I ate up my whole USD 20 budget on dumb Cloud Run and Cloud SQL services. Sure I learned a lot, but that was _twenty bucks!_ Round two has three big goals: Free, Easy, and Functional.
 
-## This project built to be production-ready!
-Jupyter Notebooks are for kindergardeners, this project is built for the real-world with production-ready features like:
-1. Built on Google Cloud Project, so it can scale with the power of the Goog
-2. Endpoints for everything, powered by FastAPI
-3. Lives in a Docker container for easy deployment and CI/CD
-4. Postgres database runs on Google Cloud SQL for even more scaling and accessibility
+### Free
+* Goodbye Google Cloud Run, you cost money and I'm not about that. This time, we're sticking with a free, f1 micro Cloud VM to run our container on and that's that!
+* Google Cloud SQL and Cloud Storage are also going away, this time being replaced by a free managed (!) database from Pinecone
+* OpenAI's embeddings are great and they let me market this project as chatGPT, but _they cost money._ Now I'm a be switching to Co:here and their endpoints, with a possibility of adding options for OpenAI's big money premium API in the future.
 
-## What's left?
-* There's probably a few things needed to hook up a Discord bot to the endpoints...
-* Extra config things in the dockerfile or .yaml file
-* Implement a caching layer for faster answers
-* Fetch embeddings from OpenAI's endpoint using parallel workers (_without_ incurring ludicrous charges)
-* Automatically provision an SQL server in one of the .yaml files to ease setup. I should really also look into seeing how much setup I can automate in the .yamls files...
-* Smol boi AI model for fine-tuning the embeddings
-* Google sheet that hooks up to said smoll boi to provide training data
-* Unit tests & automatic testing
-* Some kind of authentication on the endpoints that create new database tables
-* Optimize the cleanin regex patterns to get rid of all the moustache placeholders and other formatting BS
+### Easy
+* None of this fancy auto-deploy every time my github repo is updated. If I want to change the version running on the server I'll just manuyally do that tyvm. 
+* PostgreSQL server was slow and hard to set up, especially Google Cloud SQL (which cost money, too). Pinecone is not only free but specialized for vector data and will handle the similarity searching, too!
 
-## Oh geez that's a lot of things! Good thing I'm doing this project entirely in my free time and have no stakeholders or KPIs to meet 😁😁😁
-
-## How to get it all set up:
-Bless your heart for showing interest ❤️ We're still pre-release so this is gonna be rough...
-1. Set up your GCP project with:
-    * Cloud Run
-    * Cloud Build
-    * Cloud SQL
-    * Secrets Manager
-2. In Cloud SQL, start yourself a pretty little postgres DB and make a db user. Put the password in the secrets manager and everything else as raw text in cloudbuilder.yaml
-3. In Cloud Build, set up a new job that builds from this repo and run it.
-4. Once the thing is built, visit the service URL from Cloud Run and add "/docs" to go to the FastAPI docs screen.
-5. Now you can create your articles database! Post a fandom wiki's data dump URL (usually an amazon s3 instance gotten from the wiki's special:statistics page) and watch the program turn that wiki into a database table!
-6. That's all I got for now. Cool stuff to come in the future though!!!
+### Functional
+* This time I'm going to make the Discord bot part I swear! 
+* I love FastAPI but I'm dropping that so everything can be done solely through Discord.
 
 ## Aknowledgements & Shout-Outs
 * Borgeuad et al over at https://arxiv.org/abs/2112.04426 whose RETRO architecture is the basis for this whole damn project.
