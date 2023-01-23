@@ -9,16 +9,15 @@ ENV PYTHONFAULTHANDLER 1
 # Install & use pipenv
 COPY Pipfile Pipfile.lock ./
 #zipp y r u like this?
-RUN python -m pip install --upgrade pip && pip install --quiet zipp==3.10.0
+RUN python -m pip install --upgrade pip
 RUN pip install pipenv && pipenv install --dev --system --deploy && pipenv lock --clear
 # Create and switch to a new user
 RUN useradd --create-home appuser
 WORKDIR /home/appuser
 USER appuser
 # Copy app files and the actual application
-COPY main.py ./
 COPY ./src ./src 
 COPY ./models ./models
 COPY ./data ./data
 #
-CMD ["pipenv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["pipenv", "run", "python", "/src/bot.py"]
