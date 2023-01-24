@@ -19,11 +19,11 @@ When I was last developing this, I ate up my whole USD 20 budget on dumb Cloud R
 * I love FastAPI but I'm dropping that so everything can be done solely through Discord.
 
 ## To-Do List:
-- [ ] Pull all the wiki data and use it to populate the database, not just a locall-hosted sample
-- [ ] Memory management! Delete the XML files after embedding finishes
-- [ ] Get the docker image properly up and running 
+- [x] Pull all the wiki data and use it to populate the database, not just a locall-hosted sample (I sample it anyways because otherwise it would take a long time to embed everything)
+- [x] Memory management! Delete the XML files after embedding finishes
+- [x] Get the docker image properly up and running 
 - [ ] Configure the Google cloud VM to auto-start the discord bot and take the Discord token as an env variable
-- [ ] Create commands for adding Cohere and Pinecone API keys through Discord
+- [x] Create commands for adding Cohere and Pinecone API keys through Discord
 - [ ] (Do we always need to specify the index name when we query the index?)
 - [ ] Do a better job parsing the wiki data. Smaller chunks, no code, no redirects, no bullshit.
 - [ ] Experiment with different prompt screens and hyper parameters on the Cohere generate endpoint
