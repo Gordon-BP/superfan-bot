@@ -2,7 +2,6 @@ import pandas as pd
 import re
 import os
 import numpy as np
-import cohere
 from app import get_embedding
 from dotenv import load_dotenv
 import mwparserfromhell
@@ -12,13 +11,14 @@ import requests
 from pathlib import Path
 import pinecone
 import logging
+from ratelimiter import RateLimiter
 from transformers import GPT2TokenizerFast
 logging.basicConfig(level=logging.INFO)
 os.environ['TOKENIZERS_PARALLELISM'] = 'true'
 load_dotenv()
 #log.addHandler(handler)
 
-def getDataAsSoup(url:str, filepath:Path, filename:str='wiki.xml')-> BeautifulSoup:
+def getDataAsSoup(url:str, filename:str='wiki.xml')-> BeautifulSoup:
     """
     Downloads XML data from the supplied URL and turns it into a beautiful soup
 
@@ -28,14 +28,19 @@ def getDataAsSoup(url:str, filepath:Path, filename:str='wiki.xml')-> BeautifulSo
         filename(str): The name of the file used to temporarially store the data
     """
     logging.info(f"Fetching file from {url}...")
+    logging.info(f"Working dir is {os.getcwd()}")
+    filepath = Path.cwd().joinpath("data", "wiki.xml.7z")
+    filepath.touch()
+    logging.info(f"Does {filepath} exist? {filepath.exists()}")
+    logging.info(f"Saving file to {filepath}")
     response = requests.get(url)
     if(response.status_code != 200):
         logging.error("Provided URL is not valid")
         raise ValueError 
-    else: 
+    else:
         filepath.write_bytes(response.content)
-        Archive(filepath).extractall("./data/")
-        soup = BeautifulSoup(open(f"./data/{filename}"), "lxml")
+        Archive(filepath).extractall("/data")
+        soup = BeautifulSoup(open(Path.cwd().joinpath("data", "wiki.xml")), "lxml")
         return soup
 
 def cleanData(pages: ResultSet, limit:int = -1) -> pd.DataFrame:
@@ -207,7 +212,6 @@ def init_pinecone_index(df:pd.DataFrame, indexLabel:str, embeds:list[float]) -> 
     Returns
         pinecone.Index: index object of the new dataset
     """
-    load_dotenv()
     #TODO: Add text to assert that df and embeds are the same length
     rows = len(embeds[0])
     pinecone.init(os.environ['PINECONE_API_KEY'], environment='us-west1-gcp')
@@ -218,8 +222,8 @@ def init_pinecone_index(df:pd.DataFrame, indexLabel:str, embeds:list[float]) -> 
     else:
         pinecone.create_index(
             indexLabel,
-            dimension=rows,
-            metric='dotproduct'
+            dimension=4096,
+            metric='cosine'
         )
     logging.info("Index created")
     # connect to index
@@ -243,14 +247,11 @@ def init_pinecone_index(df:pd.DataFrame, indexLabel:str, embeds:list[float]) -> 
         logging.info(f"Upsertting {len(to_upsert[i:i_end])} rows of data")
         logging.info(f"to_upsert is of type {type(to_upsert)}\n")
         index.upsert(vectors=to_upsert[i:i_end], namespace="")
-        print(index.describe_index_stats())
     logging.info("Upsert completed")
     # let's view the index statistics
-    print(index.describe_index_stats())
     return index
 
-def create_index(dataSource:str, indexLabel:str, dimension:int = 1024, metric:str='cosine', 
-    overrideIndex:bool = False, maxTokens:int = 512, minTokens:int = 10) -> pinecone.Index:
+async def create_index(dataSource:str, indexLabel:str, maxTokens:int = 512, minTokens:int = 10) -> pinecone.Index:
     """
     This is supposed to be the main function that:
     1. Fetches the XML data from the provided URL ✅
@@ -260,59 +261,48 @@ def create_index(dataSource:str, indexLabel:str, dimension:int = 1024, metric:st
     4. Uploads the embeddings and content as metadata to Pinecone
     
     Parameters:
-        dataSource(str): The url where the wiki's XML is hosted. Usually an amazon s3 container
+        dataSource(str): The url where the wiki's XML is hosted. Usually an amazon s3 container.
         indexLabel(str): The name of the pinecone index where data is stores 
-        dimension(int): How long your vectors are. Default value is 1024 to match cohere's small model
-        metric(str): How to calculate vector similarity. Options include cosine, dotproduct, or euclidean
-        overrideIndex(bool): If the index already exists, setting this to True will have the system ovrride it. False by default
         maxTokens(int): The maximum token length for a chunk of text data. Pincone advises 512 so that's the default value
         minTokens(int): The minimum token length for a chunk of text data. 10 by default for no good reason.
 
     Returns
         pinecone.Index: an Index that can access the pinecone database
     """
-    if(overrideIndex):
-        logging.info(f"Creating new Index or overriding existing one...")
-        # First we need to load and clean the data
-        soup = getDataAsSoup(dataSource, Path('./data/wiki.xml.7z')) #Fetch the data
-        df = cleanData(soup.find_all('page'))
-        df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
-        tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
-        df['tokens'] = df.text.apply(lambda x:int(len(tokenizer.encode(x)))) #Get token count to find articles with long subsections
-        df_short = df.loc[(df.tokens <= maxTokens) & (df.tokens >= minTokens)]
-        chunks = []
-        for _, row in df.loc[df.tokens >= maxTokens].iterrows():
-            chunks = chunks + fast_chonk(row, tokenizer)
-        df_chunks = pd.DataFrame.from_records(chunks)
-        df = pd.concat([df_short, df_chunks])
-        df.drop("index", axis=1, inplace=True)
-        df.reset_index(drop=True)  
-        os.remove("./data/wiki.xml.7z")
-        os.remove("./data/wiki.xml")
-        # limit to 100 rows for testing
-        df = df.iloc[:100]
-    else:
-        df = pd.read_csv("./data/Witcher_preview.csv")
+    logging.info(f"Creating new Index {indexLabel} or overriding existing one...")
+    # First we need to load and clean the data
+    soup = getDataAsSoup(dataSource) #Fetch the data
+    df = cleanData(soup.find_all('page'))
+    df = df.drop(df.loc[df['text'].str.contains(r"REDIRECT", re.IGNORECASE)].index).reset_index()
+    tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    df['tokens'] = df.text.apply(lambda x:int(len(tokenizer.encode(x)))) #Get token count to find articles with long subsections
+    df_short = df.loc[(df.tokens <= maxTokens) & (df.tokens >= minTokens)]
+    chunks = []
+    for _, row in df.loc[df.tokens >= maxTokens].iterrows():
+        chunks = chunks + fast_chonk(row, tokenizer)
+    df_chunks = pd.DataFrame.from_records(chunks)
+    df = pd.concat([df_short, df_chunks])
+    df.drop("index", axis=1, inplace=True)
+    df.reset_index(drop=True)  
+    os.remove("/data/wiki.xml.7z")
+    os.remove("/data/wiki.xml")
+    #God help me I dont want to embed the entire damn thing
+    df = df.iloc[:1001]
     logging.info(f"Articles data created with shape {df.shape}")
-    #TODO: Delete the .xml and .7z files after loading them
-    logging.info('aaaaAAAAAAaaaAAAAAA\n\n\n\naaaaaAAAAAaaaaAAaAAAa')
-    # Now we embed it!
-    # setting it to only embed the first 10 for testing purposes
-    logging.info('Getting the Embeddings now....')
-    load_dotenv()
-    co = cohere.Client(os.environ['COHERE_API_KEY'])
-    logging.info("We have the key, now calling cohere...")
-    # Batch embedding to comply with their free 100/minute rate limit
+    # Embedding time!
     text_as_list = df['text'].to_list()
     dataRows = len(text_as_list)
-    logging.info(f"Prepping to embed, data is {dataRows} long")
     embed = []
+    # Let's gooooo (with a ratelimiter because free tier)
     for i in range(0, dataRows, 96):
-        i_end = min(i+100, dataRows)
-        logging.info(f"Starting embedding batch {i},embedding data from {i} to {i_end}...")
-        embeddings = get_embedding(text_as_list[i:i_end])
-        logging.info(f"We have embedded {len(embeddings)} rows")
-        [embed.append(_) for _ in embeddings]
+        with RateLimiter(max_calls=100, period=60):
+            i_end = min(i+100, dataRows)
+            logging.info(f"Starting embedding batch {i},embedding data from {i} to {i_end} of {dataRows} rows...")
+            if(i<= dataRows):
+                embeddings = await get_embedding(text_as_list[i:i_end])
+                [embed.append(_) for _ in embeddings]
+            else:
+                break
     rows = len(embed)
     logging.info("Cohere part is done")
     logging.info(f"Shape of the dataset {rows} rows")

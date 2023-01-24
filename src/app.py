@@ -6,35 +6,28 @@ import cohere
 import os
 from transformers import GPT2TokenizerFast
 
-def get_embedding(text:Union[str , pd.Series]) -> list[float]:
+async def get_embedding(text:Union[str , pd.Series]) -> list[float]:
     co = cohere.Client(os.environ["COHERE_API_KEY"])
     result = co.embed(
         texts=text,
-        model='small',
+        model='large',
         truncate='LEFT'
-        ).embeddings
-    #print(type(result))
-    #print(result)
-    print("Embeddings done!")
-    return result
+        )
+    return result.embeddings
 
-def query_index(query: str, index: str, top_k:int=3) -> dict[str]:
+async def query_index(query: str, index: str, top_k:int=3) -> dict[str]:
     """
     Uses similarity search to find relevent data chunks from the Pinecone index
     """
     print(f"Searching for a match to query {query}...")
-    query_vector = get_embedding(query)
-    print(f"Embeddings got:\n{query_vector[0:9]}")
+    query_vector = await get_embedding(query)
+    pinecone.init(os.environ['PINECONE_API_KEY'])
     idx = pinecone.Index(index)
-    print("Index got")
-    print(idx.describe_index_stats())
     results = idx.query(
         vector=query_vector,
         top_k=top_k,
         include_metadata=True
         )
-    print("results finished")
-    print(results)
     return results
 
 def prompt_GPT(prompt:str, top_articles: pd.DataFrame, articles_df:pd.DataFrame) -> str:
@@ -90,27 +83,19 @@ def prompt_GPT(prompt:str, top_articles: pd.DataFrame, articles_df:pd.DataFrame)
             )
     return response["choices"][0]["text"].strip(" \n")
 
-def prompt_completion(query:str, results:dict[list[dict]]) -> str:
+async def prompt_completion(query:str, results:dict[list[dict]]) -> str:
     co = cohere.Client(os.environ['COHERE_API_KEY'])
     myprompt = f"""
-        Using the above context, provide only the answer to the question. If you do not know the answer, say 'I don't know'
-        Context:{results}
+        Data:{results}
+        Answer the question using the above data:
         Question:{query}
         Answer:"""
-        #        
-       # Context: Geralt of Rivia is a witcher
-       # Question: Who is Geralt?
-       # Answer: Geralt is a witcher.
-       # 
     response = co.generate(
-        model='medium',
+        model='xlarge',
         num_generations=1,
-        max_tokens=40,
-        temperature=0.2,
-   #     stop_sequences=["--"],
+        max_tokens=30,
+        temperature=0.65,
+        #stop_sequences=["\n"],
         prompt=myprompt
     )
-    print(response)
-    print("response zero:")
-    print(response[0])
     return response[0]

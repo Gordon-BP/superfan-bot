@@ -32,7 +32,9 @@ When I was last developing this, I ate up my whole USD 20 budget on dumb Cloud R
 - [ ] Feature to add custom data to the bot database via Google Sheet (for small talk or other stuff)
 
 ## Aknowledgements & Shout-Outs
+* Big props to [Pinecone](https://pinecone.io) and [Cohere](https://cohere.ai) for having generous free tiers!
 * Borgeuad et al over at https://arxiv.org/abs/2112.04426 whose RETRO architecture is the basis for this whole damn project.
 * OpenAI's cookbook recipe [Question Answering using Embeddings](https://github.com/openai/openai-cookbook/blob/main/examples/Question_answering_using_embeddings.ipynb) whose code I shamelessly stole many times over along with their
 * [Collect Wikipedia data about Olympic Games 2020](https://github.com/openai/openai-cookbook/blob/838f000935d9df03e75e181cbcea2e306850794b/examples/fine-tuned_qa/olympics-1-collect-data.ipynb) cookbook recipe as well.
+* The nice people behind Pinecone's documentation whose code I stole to [create and store embeddigns from Cohere](https://docs.pinecone.io/docs/cohere).
 * Kern.ai's blog post [Fine-tuning embeddings for better similarity search](https://dev.to/meetkern/how-to-fine-tune-your-embeddings-for-better-similarity-search-445e) presents a nice walkthrough for fine-tuning embeddings.
